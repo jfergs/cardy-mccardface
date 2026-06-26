@@ -85,6 +85,72 @@ private enum MediaMode: String, CaseIterable {
     }
 }
 
+private enum PostImportApplication: String, CaseIterable {
+    case none
+    case captureOne = "capture-one"
+    case adobeBridge = "adobe-bridge"
+    case lightroomClassic = "lightroom-classic"
+    case premierePro = "premiere-pro"
+
+    var title: String {
+        switch self {
+        case .none: return "Do not open an app"
+        case .captureOne: return "Capture One"
+        case .adobeBridge: return "Adobe Bridge"
+        case .lightroomClassic: return "Adobe Lightroom Classic"
+        case .premierePro: return "Adobe Premiere Pro"
+        }
+    }
+
+    var bundleIdentifiers: [String] {
+        switch self {
+        case .none:
+            return []
+        case .captureOne:
+            return [
+                "com.captureone.captureone16",
+                "com.captureone.captureone15",
+                "com.phaseone.captureone",
+            ]
+        case .adobeBridge:
+            return [
+                "com.adobe.bridge",
+            ]
+        case .lightroomClassic:
+            return [
+                "com.adobe.LightroomClassicCC7",
+                "com.adobe.LightroomClassic",
+            ]
+        case .premierePro:
+            return [
+                "com.adobe.PremierePro",
+            ]
+        }
+    }
+
+    var applicationNames: [String] {
+        switch self {
+        case .none:
+            return []
+        case .captureOne:
+            return ["Capture One.app"]
+        case .adobeBridge:
+            return ["Adobe Bridge 2026.app", "Adobe Bridge 2025.app", "Adobe Bridge.app"]
+        case .lightroomClassic:
+            return [
+                "Adobe Lightroom Classic.app",
+                "Lightroom Classic.app",
+            ]
+        case .premierePro:
+            return [
+                "Adobe Premiere Pro 2026.app",
+                "Adobe Premiere Pro 2025.app",
+                "Adobe Premiere Pro.app",
+            ]
+        }
+    }
+}
+
 private struct CardyConfiguration {
     var destinationRoot = "\(CardyPaths.home)/Pictures"
     var workflowPreset = WorkflowPreset.personalPhoto
@@ -97,6 +163,7 @@ private struct CardyConfiguration {
     var dryRun = true
     var notificationsEnabled = true
     var revealAfterImport = false
+    var postImportApplication = PostImportApplication.none
     var minCardSizeGB = 0
     var ingestVillageMode = false
     var stationName = Host.current().localizedName ?? "CardyStation"
@@ -144,6 +211,9 @@ private struct CardyConfiguration {
         configuration.revealAfterImport =
             dictionary["revealAfterImport"] as? Bool
                 ?? configuration.revealAfterImport
+        configuration.postImportApplication = PostImportApplication(
+            rawValue: dictionary["postImportApplication"] as? String ?? ""
+        ) ?? configuration.postImportApplication
         configuration.minCardSizeGB =
             dictionary["minCardSizeGB"] as? Int ?? configuration.minCardSizeGB
         configuration.ingestVillageMode =
@@ -182,6 +252,7 @@ private struct CardyConfiguration {
             "dryRun": dryRun,
             "notificationsEnabled": notificationsEnabled,
             "revealAfterImport": revealAfterImport,
+            "postImportApplication": postImportApplication.rawValue,
             "minCardSizeGB": minCardSizeGB,
             "ingestVillageMode": ingestVillageMode,
             "stationName": stationName,
@@ -228,6 +299,7 @@ private final class SettingsWindowController: NSWindowController {
     private let destinationField = NSTextField()
     private let presetPopup = NSPopUpButton()
     private let mediaModePopup = NSPopUpButton()
+    private let postImportAppPopup = NSPopUpButton()
     private let organizationPopup = NSPopUpButton()
     private let datePopup = NSPopUpButton()
     private let shootPopup = NSPopUpButton()
@@ -250,7 +322,7 @@ private final class SettingsWindowController: NSWindowController {
     init(onSave: @escaping () -> Void) {
         self.onSave = onSave
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 700, height: 710),
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 750),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -288,6 +360,7 @@ private final class SettingsWindowController: NSWindowController {
 
         presetPopup.addItems(withTitles: WorkflowPreset.allCases.map(\.title))
         mediaModePopup.addItems(withTitles: MediaMode.allCases.map(\.title))
+        postImportAppPopup.addItems(withTitles: PostImportApplication.allCases.map(\.title))
         organizationPopup.addItems(withTitles: OrganizationMode.allCases.map(\.title))
         datePopup.addItems(withTitles: DateFolderStyle.allCases.map(\.title))
         shootPopup.addItems(withTitles: ShootFolderStyle.allCases.map(\.title))
@@ -302,6 +375,7 @@ private final class SettingsWindowController: NSWindowController {
             [NSTextField(labelWithString: "Destination"), destinationRow],
             [NSTextField(labelWithString: "Workflow preset"), presetPopup],
             [NSTextField(labelWithString: "Media"), mediaModePopup],
+            [NSTextField(labelWithString: "Open app after import"), postImportAppPopup],
             [NSTextField(labelWithString: "Organization"), organizationPopup],
             [NSTextField(labelWithString: "Date folders"), datePopup],
             [NSTextField(labelWithString: "Shoot folders"), shootPopup],
@@ -362,6 +436,7 @@ private final class SettingsWindowController: NSWindowController {
         destinationField.stringValue = configuration.destinationRoot
         presetPopup.selectItem(withTitle: configuration.workflowPreset.title)
         mediaModePopup.selectItem(withTitle: configuration.mediaMode.title)
+        postImportAppPopup.selectItem(withTitle: configuration.postImportApplication.title)
         organizationPopup.selectItem(withTitle: configuration.organizationMode.title)
         datePopup.selectItem(withTitle: configuration.dateFolderStyle.title)
         shootPopup.selectItem(withTitle: configuration.shootFolderStyle.title)
@@ -420,6 +495,8 @@ private final class SettingsWindowController: NSWindowController {
             WorkflowPreset.allCases[presetPopup.indexOfSelectedItem]
         configuration.mediaMode =
             MediaMode.allCases[mediaModePopup.indexOfSelectedItem]
+        configuration.postImportApplication =
+            PostImportApplication.allCases[postImportAppPopup.indexOfSelectedItem]
         configuration.organizationMode =
             OrganizationMode.allCases[organizationPopup.indexOfSelectedItem]
         configuration.dateFolderStyle =
@@ -453,6 +530,7 @@ private final class SettingsWindowController: NSWindowController {
             configuration.sharedManifestEnabled = true
             configuration.sharedLocksEnabled = true
             configuration.revealAfterImport = false
+            configuration.postImportApplication = .none
         }
 
         do {
@@ -484,10 +562,12 @@ private final class SettingsWindowController: NSWindowController {
             configuration.mediaMode = .photosOnly
             configuration.organizationMode = .shoots
             configuration.shootFolderStyle = .timeVolume
+            configuration.postImportApplication = .captureOne
         case .adobePhoto:
             configuration.mediaMode = .photosOnly
             configuration.organizationMode = .shoots
             configuration.shootFolderStyle = .timeVolume
+            configuration.postImportApplication = .adobeBridge
         case .videoProduction:
             configuration.mediaMode = .videosOnly
             configuration.organizationMode = .shoots
@@ -496,6 +576,7 @@ private final class SettingsWindowController: NSWindowController {
             configuration.checksumVerify = true
             configuration.preserveFullCardForVideo = true
             configuration.revealAfterImport = false
+            configuration.postImportApplication = .premierePro
         case .hybridProduction:
             configuration.mediaMode = .photosAndVideos
             configuration.organizationMode = .shoots
@@ -504,6 +585,7 @@ private final class SettingsWindowController: NSWindowController {
             configuration.checksumVerify = true
             configuration.preserveFullCardForVideo = true
             configuration.revealAfterImport = false
+            configuration.postImportApplication = .none
         case .ingestVillage:
             configuration.ingestVillageMode = true
             configuration.mediaMode = .photosAndVideos
@@ -516,6 +598,7 @@ private final class SettingsWindowController: NSWindowController {
             configuration.sharedLocksEnabled = true
             configuration.preserveFullCardForVideo = true
             configuration.revealAfterImport = false
+            configuration.postImportApplication = .none
         }
     }
 }
@@ -526,6 +609,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
     private var timer: Timer?
     private var importerProcess: Process?
     private var settingsController: SettingsWindowController?
+    private var handledPostImportReports = Set<String>()
     @Published var menuStatusTitle = "Service active"
     @Published var menuDetail = "Waiting for a camera card"
     @Published var menuSymbol = "sdcard.fill"
@@ -701,6 +785,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
             DispatchQueue.main.async {
                 self?.importerProcess = nil
                 self?.refreshStatus()
+                self?.handlePostImportApplication()
             }
         }
         do {
@@ -735,6 +820,58 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
         }
         menuDetail = message
         updateLoginItemState()
+    }
+
+    private func handlePostImportApplication() {
+        guard let status = dictionary(at: CardyPaths.status) else { return }
+        let state = status["state"] as? String ?? ""
+        guard state == "active" else { return }
+        guard
+            let report = status["lastImportReport"] as? String,
+            !report.isEmpty,
+            FileManager.default.fileExists(atPath: report),
+            !handledPostImportReports.contains(report)
+        else {
+            return
+        }
+
+        let configuration = CardyConfiguration.load()
+        guard !configuration.ingestVillageMode else { return }
+        let application = configuration.postImportApplication
+        guard application != .none else { return }
+
+        if openConfiguredApplication(application) {
+            handledPostImportReports.insert(report)
+        } else {
+            NSLog("Cardy McCardface could not find post-import app: \(application.title)")
+        }
+    }
+
+    private func openConfiguredApplication(_ application: PostImportApplication) -> Bool {
+        for bundleIdentifier in application.bundleIdentifiers {
+            if let appURL = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: bundleIdentifier
+            ) {
+                NSWorkspace.shared.openApplication(
+                    at: appURL,
+                    configuration: NSWorkspace.OpenConfiguration()
+                )
+                return true
+            }
+        }
+
+        for name in application.applicationNames {
+            let appURL = URL(fileURLWithPath: "/Applications").appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: appURL.path) {
+                NSWorkspace.shared.openApplication(
+                    at: appURL,
+                    configuration: NSWorkspace.OpenConfiguration()
+                )
+                return true
+            }
+        }
+
+        return false
     }
 
     @objc func showSettings() {

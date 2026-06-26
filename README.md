@@ -18,6 +18,7 @@ and optionally ejects the card.
 - Optional full visible card preservation for video and hybrid workflows
 - Ready handoff files after successful verification
 - Static local ingest dashboard generated from shared status/manifests
+- Optional post-import launch of Capture One or Adobe apps
 - One folder per day or multiple shoots per day
 - Configurable date layouts:
   - `YYYY/YYYY-MM-DD`
@@ -144,6 +145,19 @@ The settings window includes workflow presets:
 Presets apply conservative defaults for media mode, folder organization,
 checksum behavior, and production safety. They do not launch creative apps or
 mount network shares.
+
+Personal and production presets can optionally open a creative app after a
+verified import. Supported handoff targets are:
+
+- Capture One
+- Adobe Bridge
+- Adobe Lightroom Classic
+- Adobe Premiere Pro
+
+App launching is handled by the macOS app after the importer exits successfully.
+If the selected app is not installed, the import remains successful and Cardy
+logs the missing app. Ingest Village mode disables post-import app launching by
+default.
 
 Capture One presets create:
 

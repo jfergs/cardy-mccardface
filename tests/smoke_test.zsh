@@ -69,6 +69,7 @@ write_status "importing" "Importing two photos" 2 "${TEST_ROOT}/destination" ||
 /usr/bin/plutil -insert dryRun -bool false "$CONFIG_FILE"
 /usr/bin/plutil -insert notificationsEnabled -bool true "$CONFIG_FILE"
 /usr/bin/plutil -insert revealAfterImport -bool false "$CONFIG_FILE"
+/usr/bin/plutil -insert postImportApplication -string "none" "$CONFIG_FILE"
 /usr/bin/plutil -insert minCardSizeGB -integer 8 "$CONFIG_FILE"
 /usr/bin/plutil -insert ingestVillageMode -bool true "$CONFIG_FILE"
 /usr/bin/plutil -insert stationName -string "Ingest-01" "$CONFIG_FILE"

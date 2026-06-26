@@ -37,6 +37,11 @@ Notification previews can expose source volume names, destination paths, and
 file counts on the lock screen. Disable notifications in the settings window or
 adjust macOS notification preview settings when this information is sensitive.
 
+Optional post-import app launching can reveal the imported destination to the
+selected creative application through normal macOS app-launch behavior. Disable
+post-import app launch for shared ingest stations when operators should not
+foreground creative apps.
+
 Ingest Village mode is designed for shared production storage. Its shared
 status and manifest files can expose station names, operator names, hostnames,
 volume names, destination paths, counts, byte totals, timestamps, and
