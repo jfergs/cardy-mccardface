@@ -18,7 +18,7 @@ jobs:
 
       - name: Validate zsh syntax
         run: |
-          for script in CardyMcCardface/Resources/photo_import.sh install.sh uninstall.sh tests/smoke_test.zsh; do
+          for script in CardyMcCardface/Resources/photo_import.sh CardyMcCardface/Resources/dashboard.sh install.sh uninstall.sh tests/smoke_test.zsh; do
             /bin/zsh -n "$script"
           done
 

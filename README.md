@@ -329,6 +329,9 @@ done
 /bin/zsh tests/smoke_test.zsh
 ```
 
+See `RELEASE.md` for the full release checklist and `CHANGELOG.md` for notable
+changes.
+
 ## Roadmap
 
 The production workflow work is being built in staged sprints:
