@@ -18,13 +18,22 @@ jobs:
 
       - name: Validate zsh syntax
         run: |
-          /bin/zsh -n photo_import.sh
-          /bin/zsh -n install.sh
-          /bin/zsh -n uninstall.sh
-          /bin/zsh -n tests/smoke_test.zsh
+          for script in CardyMcCardface/Resources/photo_import.sh install.sh uninstall.sh tests/smoke_test.zsh; do
+            /bin/zsh -n "$script"
+          done
 
-      - name: Validate LaunchAgent plist
-        run: /usr/bin/plutil -lint com.cardymccardface.photoimporter.plist
+      - name: Validate app Info.plist
+        run: /usr/bin/plutil -lint CardyMcCardface/Info.plist
+
+      - name: Build Xcode app
+        run: |
+          /usr/bin/xcodebuild \
+            -project CardyMcCardface.xcodeproj \
+            -scheme CardyMcCardface \
+            -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
 
       - name: Run smoke test
         run: /bin/zsh tests/smoke_test.zsh

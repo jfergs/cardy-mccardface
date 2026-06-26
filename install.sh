@@ -3,26 +3,52 @@
 set -eu
 
 PROJECT_DIR="${0:A:h}"
-INSTALL_DIR="${HOME}/Library/Scripts/CardyMcCardface"
-AGENT_DIR="${HOME}/Library/LaunchAgents"
-LOG_DIR="${HOME}/Library/Logs"
-LABEL="com.cardymccardface.photoimporter"
-PLIST_NAME="${LABEL}.plist"
+PROJECT="${PROJECT_DIR}/CardyMcCardface.xcodeproj"
+SCHEME="CardyMcCardface"
+DERIVED_DATA="${TMPDIR:-/tmp}/CardyMcCardfaceDerivedData"
+BUILT_APP="${DERIVED_DATA}/Build/Products/Release/Cardy McCardface.app"
+APP_PATH="${HOME}/Applications/Cardy McCardface.app"
+APP_EXECUTABLE="${APP_PATH}/Contents/MacOS/CardyMcCardface"
 DOMAIN="gui/$(/usr/bin/id -u)"
+LEGACY_IMPORTER="${HOME}/Library/LaunchAgents/com.cardymccardface.photoimporter.plist"
+LEGACY_STATUS="${HOME}/Library/LaunchAgents/com.cardymccardface.statusitem.plist"
 
-print "Installing Cardy McCardface..."
+print "Building Cardy McCardface with Xcode..."
 
-command mkdir -p "$INSTALL_DIR" "$AGENT_DIR" "$LOG_DIR"
-/bin/cp "$PROJECT_DIR/photo_import.sh" "$INSTALL_DIR/photo_import.sh"
-/bin/cp "$PROJECT_DIR/$PLIST_NAME" "$AGENT_DIR/$PLIST_NAME"
-command chmod 755 "$INSTALL_DIR/photo_import.sh"
-command chmod 644 "$AGENT_DIR/$PLIST_NAME"
+/usr/bin/xcodebuild -version >/dev/null 2>&1 || {
+  print -ru2 -- "A working Xcode installation is required."
+  exit 1
+}
 
-/usr/bin/plutil -lint "$AGENT_DIR/$PLIST_NAME"
-/bin/launchctl bootout "$DOMAIN" "$AGENT_DIR/$PLIST_NAME" 2>/dev/null || true
-/bin/launchctl bootstrap "$DOMAIN" "$AGENT_DIR/$PLIST_NAME"
-/bin/launchctl enable "${DOMAIN}/${LABEL}"
+/usr/bin/xcodebuild \
+  -project "$PROJECT" \
+  -scheme "$SCHEME" \
+  -configuration Release \
+  -derivedDataPath "$DERIVED_DATA" \
+  CODE_SIGNING_ALLOWED=NO \
+  build
 
-print "Installed and loaded ${LABEL}."
-print "Edit configuration in: ${INSTALL_DIR}/photo_import.sh"
-print "Log file: ${LOG_DIR}/CardyMcCardface.log"
+[[ -d "$BUILT_APP" ]] || {
+  print -ru2 -- "Xcode did not produce the expected app: $BUILT_APP"
+  exit 1
+}
+
+# Remove development-era background jobs and generated app variants.
+/bin/launchctl bootout "$DOMAIN" "$LEGACY_IMPORTER" 2>/dev/null || true
+/bin/launchctl bootout "$DOMAIN" "$LEGACY_STATUS" 2>/dev/null || true
+/usr/bin/pkill -f "Cardy McCardface Status.app/Contents/MacOS" 2>/dev/null || true
+/usr/bin/pkill -f "${APP_EXECUTABLE}" 2>/dev/null || true
+/usr/bin/pkill -f "Cardy McCardface.app/Contents/Resources/photo_import.sh" 2>/dev/null || true
+/bin/rm -f "$LEGACY_IMPORTER" "$LEGACY_STATUS"
+/bin/rm -rf "${HOME}/Applications/Cardy McCardface Status.app"
+
+command mkdir -p "${HOME}/Applications"
+/bin/rm -rf "$APP_PATH"
+/usr/bin/ditto "$BUILT_APP" "$APP_PATH"
+command chmod 755 "$APP_EXECUTABLE" "$APP_PATH/Contents/Resources/photo_import.sh"
+/usr/bin/codesign --force --deep --sign - "$APP_PATH"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+  -f "$APP_PATH"
+/usr/bin/open -na "$APP_PATH"
+
+print "Installed: ${APP_PATH}"

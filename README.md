@@ -1,121 +1,137 @@
 # Cardy McCardface
 
-Cardy McCardface automatically imports photos from removable camera cards on
-macOS. A per-user LaunchAgent watches for mounted volumes, identifies camera
-media, copies supported images with `rsync`, verifies the result, writes a JSON
-import sidecar, and optionally ejects the card.
+Cardy McCardface is a native macOS menu-bar application that automatically
+imports photos from removable camera cards.
 
-It uses software included with macOS. If `exiftool` is already installed, it is
-used for richer capture metadata; otherwise the importer falls back to `mdls`
-and file creation dates.
+The app watches for newly mounted volumes, runs the bundled `zsh`/`rsync`
+importer, verifies copied files, reports progress through Notification Center,
+and optionally ejects the card.
+
+## Features
+
+- Native macOS menu-bar application
+- Automatic detection of mounted camera cards
+- Destination-folder picker and settings window
+- One folder per day or multiple shoots per day
+- Configurable date layouts:
+  - `YYYY/YYYY-MM-DD`
+  - `YYYY-MM-DD`
+  - `YYYY/MM/DD`
+- Shoot folders named by time, card name, or camera model
+- Resumable `rsync` imports that skip existing files
+- Count/size verification with optional checksums
+- Native macOS notifications
+- Import-status menu-bar icon
+- Optional automatic eject
+- Dry-run mode
+- JSON import sidecars
+- Local-only operation with no telemetry
 
 ## Requirements
 
-- macOS with `zsh`, `launchd`, `rsync`, `diskutil`, `mdls`, and `osascript`
-- A destination volume that is already mounted
-- Read access to removable media and write access to the destination
+- macOS 13 or newer
+- Xcode Command Line Tools when installing from source
+- A destination folder that is already mounted and writable
 
-Cardy McCardface does not mount SMB or other network shares.
+Cardy does not mount SMB or other network shares.
 
-## Configure before installation
-
-Edit the configuration block at the top of `photo_import.sh`:
+Install the command-line tools if needed:
 
 ```zsh
-DESTINATION_ROOT="/Volumes/PhotoNAS/Photos"
-AUTO_EJECT=true
-SUPPORTED_EXTENSIONS=(CR3 CR2 NEF ARW RAF ORF RW2 DNG JPG JPEG HEIC PNG TIF TIFF)
-LOGFILE="${HOME}/Library/Logs/CardyMcCardface.log"
-DRY_RUN=false
+xcode-select --install
 ```
 
-Also review:
+## Install from source
 
 ```zsh
-CHECKSUM_VERIFY=false
-EXCLUDED_VOLUMES=("/Volumes/PhotoNAS" "/Volumes/Macintosh HD")
-MIN_CARD_SIZE_GB=0
-```
-
-Use the actual mount point of your already-mounted destination. Add its volume
-root to `EXCLUDED_VOLUMES` so it can never be considered an import source.
-
-For a first test, set `DRY_RUN=true` and `AUTO_EJECT=false`.
-
-## Install
-
-```zsh
-chmod 755 install.sh uninstall.sh photo_import.sh
+git clone https://github.com/jfergs/cardy-mccardface.git
+cd cardy-mccardface
+chmod 755 install.sh uninstall.sh CardyMcCardface/Resources/photo_import.sh
 ./install.sh
 ```
 
-The installer copies files to:
+The installer builds and signs the app locally, then installs it at:
 
-- `~/Library/Scripts/CardyMcCardface/photo_import.sh`
-- `~/Library/LaunchAgents/com.cardymccardface.photoimporter.plist`
+```text
+~/Applications/Cardy McCardface.app
+```
 
-Configuration changes made after installation must be applied to the installed
-script, or followed by another `./install.sh`.
+On first launch, Cardy opens its settings window and does not import until a
+configuration is saved. Choose the destination and review the import options.
+Existing settings from earlier versions are reused.
 
-## How mounting triggers an import
+## Menu bar
 
-The LaunchAgent combines three launchd mechanisms:
+The menu displays:
 
-- `StartOnMount` starts the job when a filesystem is mounted.
-- `WatchPaths` observes changes under `/Volumes`.
-- `RunAtLoad` scans cards that were already mounted when the agent loaded.
+- current service/import status;
+- Settings;
+- Scan Mounted Volumes;
+- Open Import Log;
+- Reveal Destination;
+- Launch at Login;
+- Quit.
 
-Launchd does not pass the new volume path to the job. The script therefore
-rescans `/Volumes`, accepts only removable media, ignores configured volumes,
-and uses a per-device lock to prevent overlapping imports.
+The icon changes while importing or when an error needs attention.
 
-## Import layout
+Cardy registers itself as a macOS login item through `SMAppService`. Login items
+can also be reviewed under **System Settings → General → Login Items**.
 
-The capture date is selected from the first supported image using:
+## Card detection
+
+Cardy subscribes to macOS workspace mount notifications and runs an initial scan
+when the app launches. A removable volume is considered a camera card if it has
+a `DCIM` directory or contains a supported image.
+
+Supported extensions:
+
+```text
+CR3 CR2 NEF ARW RAF ORF RW2 DNG JPG JPEG HEIC PNG TIF TIFF
+```
+
+Hidden files and hidden directories are ignored.
+
+## Capture date and destination
+
+The first supported image determines the shoot date:
 
 1. EXIF `DateTimeOriginal`
 2. EXIF `CreateDate`
 3. Spotlight content creation date
 4. File creation date
 
-Files are imported into:
+The default layout is:
 
 ```text
 DESTINATION_ROOT/YYYY/YYYY-MM-DD/
 ```
 
-Directory structure beneath `DCIM` is preserved. Existing destination files
-are skipped and are never overwritten.
+Separate-shoot mode adds a timestamped shoot directory beneath the date.
 
-Each successful import also writes a `photo-import-*.json` sidecar containing
-the import timestamp, camera model, capture date, source volume name, counts,
-bytes, duration, and verification status.
+## Configuration and state
 
-## Logs and troubleshooting
+Settings are stored as a data-only property list:
 
-Follow the log:
+```text
+~/Library/Application Support/CardyMcCardface/config.plist
+```
+
+Current importer state is stored at:
+
+```text
+~/Library/Application Support/CardyMcCardface/status.plist
+```
+
+## Logging
+
+Follow the importer log:
 
 ```zsh
 tail -f ~/Library/Logs/CardyMcCardface.log
 ```
 
-Inspect launchd state:
-
-```zsh
-launchctl print "gui/$(id -u)/com.cardymccardface.photoimporter"
-```
-
-Force a rescan:
-
-```zsh
-launchctl kickstart -k "gui/$(id -u)/com.cardymccardface.photoimporter"
-```
-
-If access is denied, review macOS Privacy & Security permissions for removable
-volumes, network volumes, and the shell process running the agent.
-
-If verification fails, the card remains mounted. Partial transfers are retained
-in `.photoimport-partial` and can resume on a later run.
+If verification fails, the card remains mounted. Interrupted transfers retain
+partial files and can resume later.
 
 ## Uninstall
 
@@ -123,30 +139,35 @@ in `.photoimport-partial` and can resume on a later run.
 ./uninstall.sh
 ```
 
-Logs are intentionally retained. Remove them separately if desired:
+The uninstaller removes the app and login registration. Settings, logs, and
+imported photos are retained.
+
+## Development
+
+Run local validation:
 
 ```zsh
-rm -f ~/Library/Logs/CardyMcCardface.log*
+for script in CardyMcCardface/Resources/photo_import.sh install.sh uninstall.sh tests/smoke_test.zsh; do
+  /bin/zsh -n "$script"
+done
+
+/usr/bin/plutil -lint CardyMcCardface/Info.plist
+
+/usr/bin/xcodebuild \
+  -project CardyMcCardface.xcodeproj \
+  -scheme CardyMcCardface \
+  -configuration Release \
+  -derivedDataPath /tmp/CardyMcCardfaceDerivedData \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+
+/bin/zsh tests/smoke_test.zsh
 ```
 
 ## Privacy
 
-The importer is local-only and has no telemetry. Logs and JSON sidecars may
-contain camera models, volume names, local destination paths, counts, and
-timestamps. Do not publish them without review.
-
-## Development
-
-Run local validation on macOS:
-
-```zsh
-/bin/zsh -n photo_import.sh install.sh uninstall.sh tests/smoke_test.zsh
-/usr/bin/plutil -lint com.cardymccardface.photoimporter.plist
-/bin/zsh tests/smoke_test.zsh
-```
-
-The GitHub Actions workflow runs the same checks on a macOS runner with
-read-only repository permissions.
+Cardy is local-only. Logs, sidecars, notifications, and the menu can contain
+camera models, volume names, destination paths, counts, and timestamps.
 
 ## License
 

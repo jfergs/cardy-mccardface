@@ -1,0 +1,619 @@
+import AppKit
+import Foundation
+import ServiceManagement
+import SwiftUI
+
+private enum CardyPaths {
+    static let home = FileManager.default.homeDirectoryForCurrentUser.path
+    static let supportDirectory = "\(home)/Library/Application Support/CardyMcCardface"
+    static let configuration = "\(supportDirectory)/config.plist"
+    static let status = "\(supportDirectory)/status.plist"
+    static let log = "\(home)/Library/Logs/CardyMcCardface.log"
+}
+
+private enum OrganizationMode: String, CaseIterable {
+    case daily
+    case shoots
+
+    var title: String {
+        switch self {
+        case .daily: return "One folder per day"
+        case .shoots: return "Separate shoots within each day"
+        }
+    }
+}
+
+private enum DateFolderStyle: String, CaseIterable {
+    case yearDate = "year-date"
+    case dateOnly = "date-only"
+    case nestedDate = "nested-date"
+
+    var title: String {
+        switch self {
+        case .yearDate: return "Year / YYYY-MM-DD"
+        case .dateOnly: return "YYYY-MM-DD"
+        case .nestedDate: return "Year / Month / Day"
+        }
+    }
+}
+
+private enum ShootFolderStyle: String, CaseIterable {
+    case timeVolume = "time-volume"
+    case timeCamera = "time-camera"
+    case timeOnly = "time-only"
+
+    var title: String {
+        switch self {
+        case .timeVolume: return "Time + card name"
+        case .timeCamera: return "Time + camera model"
+        case .timeOnly: return "Time only"
+        }
+    }
+}
+
+private struct CardyConfiguration {
+    var destinationRoot = "\(CardyPaths.home)/Pictures"
+    var organizationMode = OrganizationMode.daily
+    var dateFolderStyle = DateFolderStyle.yearDate
+    var shootFolderStyle = ShootFolderStyle.timeVolume
+    var autoEject = true
+    var checksumVerify = false
+    var dryRun = true
+    var notificationsEnabled = true
+    var minCardSizeGB = 0
+
+    static func load() -> CardyConfiguration {
+        guard
+            let dictionary = NSDictionary(contentsOfFile: CardyPaths.configuration)
+                as? [String: Any]
+        else {
+            return CardyConfiguration()
+        }
+
+        var configuration = CardyConfiguration()
+        configuration.destinationRoot =
+            dictionary["destinationRoot"] as? String ?? configuration.destinationRoot
+        configuration.organizationMode = OrganizationMode(
+            rawValue: dictionary["organizationMode"] as? String ?? ""
+        ) ?? configuration.organizationMode
+        configuration.dateFolderStyle = DateFolderStyle(
+            rawValue: dictionary["dateFolderStyle"] as? String ?? ""
+        ) ?? configuration.dateFolderStyle
+        configuration.shootFolderStyle = ShootFolderStyle(
+            rawValue: dictionary["shootFolderStyle"] as? String ?? ""
+        ) ?? configuration.shootFolderStyle
+        configuration.autoEject =
+            dictionary["autoEject"] as? Bool ?? configuration.autoEject
+        configuration.checksumVerify =
+            dictionary["checksumVerify"] as? Bool ?? configuration.checksumVerify
+        configuration.dryRun = dictionary["dryRun"] as? Bool ?? configuration.dryRun
+        configuration.notificationsEnabled =
+            dictionary["notificationsEnabled"] as? Bool
+                ?? configuration.notificationsEnabled
+        configuration.minCardSizeGB =
+            dictionary["minCardSizeGB"] as? Int ?? configuration.minCardSizeGB
+        return configuration
+    }
+
+    func save() throws {
+        let dictionary: NSDictionary = [
+            "destinationRoot": destinationRoot,
+            "organizationMode": organizationMode.rawValue,
+            "dateFolderStyle": dateFolderStyle.rawValue,
+            "shootFolderStyle": shootFolderStyle.rawValue,
+            "autoEject": autoEject,
+            "checksumVerify": checksumVerify,
+            "dryRun": dryRun,
+            "notificationsEnabled": notificationsEnabled,
+            "minCardSizeGB": minCardSizeGB,
+        ]
+
+        try FileManager.default.createDirectory(
+            atPath: CardyPaths.supportDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+
+        let temporary = "\(CardyPaths.configuration).tmp.\(ProcessInfo.processInfo.processIdentifier)"
+        guard dictionary.write(toFile: temporary, atomically: true) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: temporary
+        )
+        if FileManager.default.fileExists(atPath: CardyPaths.configuration) {
+            _ = try FileManager.default.replaceItemAt(
+                URL(fileURLWithPath: CardyPaths.configuration),
+                withItemAt: URL(fileURLWithPath: temporary),
+                backupItemName: nil,
+                options: []
+            )
+        } else {
+            try FileManager.default.moveItem(
+                atPath: temporary,
+                toPath: CardyPaths.configuration
+            )
+        }
+    }
+}
+
+@MainActor
+private final class SettingsWindowController: NSWindowController {
+    private let destinationField = NSTextField()
+    private let organizationPopup = NSPopUpButton()
+    private let datePopup = NSPopUpButton()
+    private let shootPopup = NSPopUpButton()
+    private let autoEjectButton = NSButton(checkboxWithTitle: "Eject after verified import", target: nil, action: nil)
+    private let checksumButton = NSButton(checkboxWithTitle: "Checksum verification", target: nil, action: nil)
+    private let dryRunButton = NSButton(checkboxWithTitle: "Dry run — do not copy files", target: nil, action: nil)
+    private let notificationsButton = NSButton(checkboxWithTitle: "Show macOS notifications", target: nil, action: nil)
+    private let minimumSizeField = NSTextField()
+    private let onSave: () -> Void
+
+    init(onSave: @escaping () -> Void) {
+        self.onSave = onSave
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 610, height: 470),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Cardy McCardface Settings"
+        window.center()
+        super.init(window: window)
+        buildInterface()
+        loadConfiguration()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    private func buildInterface() {
+        guard let content = window?.contentView else { return }
+
+        let title = NSTextField(labelWithString: "Cardy McCardface")
+        title.font = .boldSystemFont(ofSize: 22)
+
+        let description = NSTextField(
+            wrappingLabelWithString:
+                "Choose where camera cards are imported and how shoots are organized."
+        )
+        description.textColor = .secondaryLabelColor
+
+        destinationField.isEditable = false
+        destinationField.lineBreakMode = .byTruncatingMiddle
+        let chooseButton = NSButton(title: "Choose…", target: self, action: #selector(chooseDestination))
+        let destinationRow = NSStackView(views: [destinationField, chooseButton])
+        destinationRow.orientation = .horizontal
+        destinationRow.spacing = 8
+        destinationField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        organizationPopup.addItems(withTitles: OrganizationMode.allCases.map(\.title))
+        datePopup.addItems(withTitles: DateFolderStyle.allCases.map(\.title))
+        shootPopup.addItems(withTitles: ShootFolderStyle.allCases.map(\.title))
+        minimumSizeField.placeholderString = "0"
+        minimumSizeField.alignment = .right
+
+        let form = NSGridView(views: [
+            [NSTextField(labelWithString: "Destination"), destinationRow],
+            [NSTextField(labelWithString: "Organization"), organizationPopup],
+            [NSTextField(labelWithString: "Date folders"), datePopup],
+            [NSTextField(labelWithString: "Shoot folders"), shootPopup],
+            [NSTextField(labelWithString: "Minimum card size (GB)"), minimumSizeField],
+        ])
+        form.rowSpacing = 12
+        form.columnSpacing = 14
+        form.column(at: 0).xPlacement = .trailing
+        form.column(at: 1).xPlacement = .fill
+
+        let options = NSStackView(views: [
+            autoEjectButton,
+            checksumButton,
+            dryRunButton,
+            notificationsButton,
+        ])
+        options.orientation = .vertical
+        options.alignment = .leading
+        options.spacing = 8
+
+        let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancel))
+        let saveButton = NSButton(title: "Save", target: self, action: #selector(save))
+        saveButton.keyEquivalent = "\r"
+        let buttons = NSStackView(views: [NSView(), cancelButton, saveButton])
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+
+        let stack = NSStackView(views: [title, description, form, options, buttons])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 18
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24),
+            form.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            buttons.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            minimumSizeField.widthAnchor.constraint(equalToConstant: 90),
+        ])
+    }
+
+    private func loadConfiguration() {
+        let configuration = CardyConfiguration.load()
+        destinationField.stringValue = configuration.destinationRoot
+        organizationPopup.selectItem(withTitle: configuration.organizationMode.title)
+        datePopup.selectItem(withTitle: configuration.dateFolderStyle.title)
+        shootPopup.selectItem(withTitle: configuration.shootFolderStyle.title)
+        autoEjectButton.state = configuration.autoEject ? .on : .off
+        checksumButton.state = configuration.checksumVerify ? .on : .off
+        dryRunButton.state = configuration.dryRun ? .on : .off
+        notificationsButton.state = configuration.notificationsEnabled ? .on : .off
+        minimumSizeField.integerValue = configuration.minCardSizeGB
+    }
+
+    @objc private func chooseDestination() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.directoryURL = URL(fileURLWithPath: destinationField.stringValue)
+        if panel.runModal() == .OK, let url = panel.url {
+            destinationField.stringValue = url.path
+        }
+    }
+
+    @objc private func save() {
+        let minimumSize = minimumSizeField.integerValue
+        guard minimumSize >= 0 else {
+            showError("Minimum card size must be zero or a positive whole number.")
+            return
+        }
+        guard !destinationField.stringValue.isEmpty else {
+            showError("Choose a destination folder.")
+            return
+        }
+
+        var configuration = CardyConfiguration()
+        configuration.destinationRoot = destinationField.stringValue
+        configuration.organizationMode =
+            OrganizationMode.allCases[organizationPopup.indexOfSelectedItem]
+        configuration.dateFolderStyle =
+            DateFolderStyle.allCases[datePopup.indexOfSelectedItem]
+        configuration.shootFolderStyle =
+            ShootFolderStyle.allCases[shootPopup.indexOfSelectedItem]
+        configuration.autoEject = autoEjectButton.state == .on
+        configuration.checksumVerify = checksumButton.state == .on
+        configuration.dryRun = dryRunButton.state == .on
+        configuration.notificationsEnabled = notificationsButton.state == .on
+        configuration.minCardSizeGB = minimumSize
+
+        do {
+            try configuration.save()
+            window?.close()
+            onSave()
+        } catch {
+            showError("Could not save settings: \(error.localizedDescription)")
+        }
+    }
+
+    @objc private func cancel() {
+        window?.close()
+    }
+
+    private func showError(_ message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Cardy McCardface"
+        alert.informativeText = message
+        alert.runModal()
+    }
+}
+
+@MainActor
+private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+    private var launchAtLoginItem: NSMenuItem?
+    private var timer: Timer?
+    private var importerProcess: Process?
+    private var settingsController: SettingsWindowController?
+    @Published var menuStatusTitle = "Service active"
+    @Published var menuDetail = "Waiting for a camera card"
+    @Published var menuSymbol = "sdcard.fill"
+    @Published var launchAtLoginEnabled = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--unregister-login") {
+            try? SMAppService.mainApp.unregister()
+            DispatchQueue.main.async {
+                NSApplication.shared.terminate(nil)
+            }
+        }
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApplication.shared.setActivationPolicy(.regular)
+        createApplicationMenu()
+        registerForVolumeMounts()
+        registerLoginItem()
+        refreshStatus()
+
+        timer = Timer.scheduledTimer(
+            timeInterval: 1,
+            target: self,
+            selector: #selector(refreshStatus),
+            userInfo: nil,
+            repeats: true
+        )
+
+        if !FileManager.default.fileExists(atPath: CardyPaths.configuration) {
+            showSettings()
+        } else {
+            runImporter(reason: "application launch")
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(
+        _ sender: NSApplication
+    ) -> Bool {
+        false
+    }
+
+    private func createApplicationMenu() {
+        let mainMenu = NSMenu()
+
+        let applicationMenuItem = NSMenuItem()
+        mainMenu.addItem(applicationMenuItem)
+        let applicationMenu = NSMenu(title: "Cardy McCardface")
+        applicationMenuItem.submenu = applicationMenu
+
+        applicationMenu.addItem(
+            withTitle: "About Cardy McCardface",
+            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: ""
+        )
+        applicationMenu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(showSettings),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        applicationMenu.addItem(settingsItem)
+        applicationMenu.addItem(.separator())
+
+        applicationMenu.addItem(
+            withTitle: "Hide Cardy McCardface",
+            action: #selector(NSApplication.hide(_:)),
+            keyEquivalent: "h"
+        )
+        applicationMenu.addItem(
+            withTitle: "Hide Others",
+            action: #selector(NSApplication.hideOtherApplications(_:)),
+            keyEquivalent: "h"
+        ).keyEquivalentModifierMask = [.command, .option]
+        applicationMenu.addItem(
+            withTitle: "Show All",
+            action: #selector(NSApplication.unhideAllApplications(_:)),
+            keyEquivalent: ""
+        )
+        applicationMenu.addItem(.separator())
+        applicationMenu.addItem(
+            withTitle: "Quit Cardy McCardface",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+
+        let windowMenuItem = NSMenuItem()
+        mainMenu.addItem(windowMenuItem)
+        let windowMenu = NSMenu(title: "Window")
+        windowMenuItem.submenu = windowMenu
+        let settingsWindowItem = NSMenuItem(
+            title: "Cardy McCardface Settings",
+            action: #selector(showSettings),
+            keyEquivalent: "0"
+        )
+        settingsWindowItem.target = self
+        windowMenu.addItem(settingsWindowItem)
+
+        NSApplication.shared.mainMenu = mainMenu
+        NSApplication.shared.windowsMenu = windowMenu
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        showSettings()
+        return true
+    }
+
+    private func registerForVolumeMounts() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(volumeMounted),
+            name: NSWorkspace.didMountNotification,
+            object: nil
+        )
+    }
+
+    private func registerLoginItem() {
+        do {
+            if SMAppService.mainApp.status == .notRegistered {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            NSLog("Cardy McCardface could not register as a login item: \(error)")
+        }
+        updateLoginItemState()
+    }
+
+    private func updateLoginItemState() {
+        launchAtLoginEnabled = SMAppService.mainApp.status == .enabled
+        launchAtLoginItem?.state = launchAtLoginEnabled ? .on : .off
+    }
+
+    @objc func toggleLaunchAtLogin() {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            showAlert("Could not update the login item: \(error.localizedDescription)")
+        }
+        updateLoginItemState()
+    }
+
+    @objc private func volumeMounted(_ notification: Notification) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.runImporter(reason: "volume mounted")
+        }
+    }
+
+    private func runImporter(reason: String) {
+        guard importerProcess == nil else { return }
+        guard
+            let script = Bundle.main.url(
+                forResource: "photo_import",
+                withExtension: "sh"
+            )
+        else {
+            showAlert("The bundled importer script is missing.")
+            return
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [script.path]
+        process.terminationHandler = { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.importerProcess = nil
+                self?.refreshStatus()
+            }
+        }
+        do {
+            try process.run()
+            importerProcess = process
+            NSLog("Cardy McCardface started importer: \(reason)")
+        } catch {
+            showAlert("Could not start the importer: \(error.localizedDescription)")
+        }
+    }
+
+    private func dictionary(at path: String) -> [String: Any]? {
+        NSDictionary(contentsOfFile: path) as? [String: Any]
+    }
+
+    @objc private func refreshStatus() {
+        let status = dictionary(at: CardyPaths.status)
+        let state = status?["state"] as? String ?? "active"
+        let message = status?["message"] as? String
+            ?? "Service active — waiting for a camera card"
+
+        switch state {
+        case "importing":
+            menuSymbol = "arrow.down.circle.fill"
+            menuStatusTitle = "Import running"
+        case "error":
+            menuSymbol = "exclamationmark.triangle.fill"
+            menuStatusTitle = "Attention required"
+        default:
+            menuSymbol = "sdcard.fill"
+            menuStatusTitle = "Service active"
+        }
+        menuDetail = message
+        updateLoginItemState()
+    }
+
+    @objc func showSettings() {
+        if settingsController == nil {
+            settingsController = SettingsWindowController { [weak self] in
+                self?.refreshStatus()
+                self?.runImporter(reason: "settings saved")
+            }
+        }
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        settingsController?.showWindow(nil)
+        settingsController?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func scanNow() {
+        runImporter(reason: "manual scan")
+    }
+
+    @objc func openLog() {
+        FileManager.default.createFile(atPath: CardyPaths.log, contents: nil)
+        NSWorkspace.shared.open(URL(fileURLWithPath: CardyPaths.log))
+    }
+
+    @objc func revealDestination() {
+        let configuration = CardyConfiguration.load()
+        NSWorkspace.shared.selectFile(
+            nil,
+            inFileViewerRootedAtPath: configuration.destinationRoot
+        )
+    }
+
+    @objc func quit() {
+        NSApplication.shared.terminate(nil)
+    }
+
+    private func showAlert(_ message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Cardy McCardface"
+        alert.informativeText = message
+        alert.runModal()
+    }
+}
+
+@main
+private struct CardyMcCardfaceApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    var body: some Scene {
+        MenuBarExtra {
+            Text(appDelegate.menuStatusTitle)
+            Text(appDelegate.menuDetail)
+            Divider()
+            Button("Settings…") {
+                appDelegate.showSettings()
+            }
+            Button("Scan Mounted Volumes") {
+                appDelegate.scanNow()
+            }
+            Button("Open Import Log") {
+                appDelegate.openLog()
+            }
+            Button("Reveal Destination") {
+                appDelegate.revealDestination()
+            }
+            Divider()
+            Button(
+                appDelegate.launchAtLoginEnabled
+                    ? "✓ Launch at Login"
+                    : "Launch at Login"
+            ) {
+                appDelegate.toggleLaunchAtLogin()
+            }
+            Divider()
+            Button("Quit Cardy McCardface") {
+                appDelegate.quit()
+            }
+        } label: {
+            Label("Cardy", systemImage: appDelegate.menuSymbol)
+        }
+
+        Settings {
+            EmptyView()
+        }
+    }
+}
