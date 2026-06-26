@@ -13,7 +13,8 @@ feature for this repository.
 Cardy McCardface runs locally. It does not make network requests or mount
 network shares. It writes:
 
-- imported images to the configured destination;
+- imported photo, video, and audio media to the configured destination;
+- production scaffold directories under the configured destination;
 - import metadata sidecars alongside imported images;
 - optional shared ingest status under the configured destination;
 - optional shared ingest manifests under the configured destination;
@@ -24,7 +25,8 @@ network shares. It writes:
 - short-lived runtime files under the current user's macOS temporary directory.
 
 Logs and sidecars can contain camera models, source volume names, destination
-paths, file counts, and timestamps. Review them before sharing.
+paths, workflow presets, media-type counts, file counts, and timestamps. Review
+them before sharing.
 
 Notification previews can expose source volume names, destination paths, and
 file counts on the lock screen. Disable notifications in the settings window or

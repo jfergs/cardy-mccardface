@@ -51,8 +51,44 @@ private enum ShootFolderStyle: String, CaseIterable {
     }
 }
 
+private enum WorkflowPreset: String, CaseIterable {
+    case personalPhoto = "personal-photo"
+    case captureOne = "capture-one"
+    case adobePhoto = "adobe-photo"
+    case videoProduction = "video-production"
+    case hybridProduction = "hybrid-production"
+    case ingestVillage = "ingest-village"
+
+    var title: String {
+        switch self {
+        case .personalPhoto: return "Personal Photo Archive"
+        case .captureOne: return "Capture One Session"
+        case .adobePhoto: return "Adobe Lightroom / Bridge"
+        case .videoProduction: return "Premiere / Resolve Video"
+        case .hybridProduction: return "Hybrid Photo + Video"
+        case .ingestVillage: return "Ingest Village"
+        }
+    }
+}
+
+private enum MediaMode: String, CaseIterable {
+    case photosOnly = "photos-only"
+    case videosOnly = "videos-only"
+    case photosAndVideos = "photos-and-videos"
+
+    var title: String {
+        switch self {
+        case .photosOnly: return "Photos only"
+        case .videosOnly: return "Video/audio only"
+        case .photosAndVideos: return "Photos + video/audio"
+        }
+    }
+}
+
 private struct CardyConfiguration {
     var destinationRoot = "\(CardyPaths.home)/Pictures"
+    var workflowPreset = WorkflowPreset.personalPhoto
+    var mediaMode = MediaMode.photosOnly
     var organizationMode = OrganizationMode.daily
     var dateFolderStyle = DateFolderStyle.yearDate
     var shootFolderStyle = ShootFolderStyle.timeVolume
@@ -80,6 +116,12 @@ private struct CardyConfiguration {
         var configuration = CardyConfiguration()
         configuration.destinationRoot =
             dictionary["destinationRoot"] as? String ?? configuration.destinationRoot
+        configuration.workflowPreset = WorkflowPreset(
+            rawValue: dictionary["workflowPreset"] as? String ?? ""
+        ) ?? configuration.workflowPreset
+        configuration.mediaMode = MediaMode(
+            rawValue: dictionary["mediaMode"] as? String ?? ""
+        ) ?? configuration.mediaMode
         configuration.organizationMode = OrganizationMode(
             rawValue: dictionary["organizationMode"] as? String ?? ""
         ) ?? configuration.organizationMode
@@ -122,6 +164,8 @@ private struct CardyConfiguration {
     func save() throws {
         let dictionary: NSDictionary = [
             "destinationRoot": destinationRoot,
+            "workflowPreset": workflowPreset.rawValue,
+            "mediaMode": mediaMode.rawValue,
             "organizationMode": organizationMode.rawValue,
             "dateFolderStyle": dateFolderStyle.rawValue,
             "shootFolderStyle": shootFolderStyle.rawValue,
@@ -172,6 +216,8 @@ private struct CardyConfiguration {
 @MainActor
 private final class SettingsWindowController: NSWindowController {
     private let destinationField = NSTextField()
+    private let presetPopup = NSPopUpButton()
+    private let mediaModePopup = NSPopUpButton()
     private let organizationPopup = NSPopUpButton()
     private let datePopup = NSPopUpButton()
     private let shootPopup = NSPopUpButton()
@@ -192,7 +238,7 @@ private final class SettingsWindowController: NSWindowController {
     init(onSave: @escaping () -> Void) {
         self.onSave = onSave
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 660, height: 650),
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 710),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -228,6 +274,8 @@ private final class SettingsWindowController: NSWindowController {
         destinationRow.spacing = 8
         destinationField.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
+        presetPopup.addItems(withTitles: WorkflowPreset.allCases.map(\.title))
+        mediaModePopup.addItems(withTitles: MediaMode.allCases.map(\.title))
         organizationPopup.addItems(withTitles: OrganizationMode.allCases.map(\.title))
         datePopup.addItems(withTitles: DateFolderStyle.allCases.map(\.title))
         shootPopup.addItems(withTitles: ShootFolderStyle.allCases.map(\.title))
@@ -240,6 +288,8 @@ private final class SettingsWindowController: NSWindowController {
 
         let form = NSGridView(views: [
             [NSTextField(labelWithString: "Destination"), destinationRow],
+            [NSTextField(labelWithString: "Workflow preset"), presetPopup],
+            [NSTextField(labelWithString: "Media"), mediaModePopup],
             [NSTextField(labelWithString: "Organization"), organizationPopup],
             [NSTextField(labelWithString: "Date folders"), datePopup],
             [NSTextField(labelWithString: "Shoot folders"), shootPopup],
@@ -296,6 +346,8 @@ private final class SettingsWindowController: NSWindowController {
     private func loadConfiguration() {
         let configuration = CardyConfiguration.load()
         destinationField.stringValue = configuration.destinationRoot
+        presetPopup.selectItem(withTitle: configuration.workflowPreset.title)
+        mediaModePopup.selectItem(withTitle: configuration.mediaMode.title)
         organizationPopup.selectItem(withTitle: configuration.organizationMode.title)
         datePopup.selectItem(withTitle: configuration.dateFolderStyle.title)
         shootPopup.selectItem(withTitle: configuration.shootFolderStyle.title)
@@ -348,6 +400,10 @@ private final class SettingsWindowController: NSWindowController {
 
         var configuration = CardyConfiguration()
         configuration.destinationRoot = destinationField.stringValue
+        configuration.workflowPreset =
+            WorkflowPreset.allCases[presetPopup.indexOfSelectedItem]
+        configuration.mediaMode =
+            MediaMode.allCases[mediaModePopup.indexOfSelectedItem]
         configuration.organizationMode =
             OrganizationMode.allCases[organizationPopup.indexOfSelectedItem]
         configuration.dateFolderStyle =
@@ -368,6 +424,8 @@ private final class SettingsWindowController: NSWindowController {
         configuration.sharedManifestEnabled = sharedManifestButton.state == .on
         configuration.sharedLocksEnabled = sharedLocksButton.state == .on
         configuration.minFreeSpaceGB = minimumFreeSpace
+
+        applyPresetDefaults(to: &configuration)
 
         if configuration.ingestVillageMode {
             configuration.organizationMode = .shoots
@@ -397,6 +455,43 @@ private final class SettingsWindowController: NSWindowController {
         alert.messageText = "Cardy McCardface"
         alert.informativeText = message
         alert.runModal()
+    }
+
+    private func applyPresetDefaults(to configuration: inout CardyConfiguration) {
+        switch configuration.workflowPreset {
+        case .personalPhoto:
+            break
+        case .captureOne:
+            configuration.mediaMode = .photosOnly
+            configuration.organizationMode = .shoots
+            configuration.shootFolderStyle = .timeVolume
+        case .adobePhoto:
+            configuration.mediaMode = .photosOnly
+            configuration.organizationMode = .shoots
+            configuration.shootFolderStyle = .timeVolume
+        case .videoProduction:
+            configuration.mediaMode = .videosOnly
+            configuration.organizationMode = .shoots
+            configuration.shootFolderStyle = .timeVolume
+            configuration.autoEject = false
+            configuration.checksumVerify = true
+        case .hybridProduction:
+            configuration.mediaMode = .photosAndVideos
+            configuration.organizationMode = .shoots
+            configuration.shootFolderStyle = .timeVolume
+            configuration.autoEject = false
+            configuration.checksumVerify = true
+        case .ingestVillage:
+            configuration.ingestVillageMode = true
+            configuration.mediaMode = .photosAndVideos
+            configuration.organizationMode = .shoots
+            configuration.shootFolderStyle = .timeVolume
+            configuration.autoEject = false
+            configuration.checksumVerify = true
+            configuration.sharedStatusEnabled = true
+            configuration.sharedManifestEnabled = true
+            configuration.sharedLocksEnabled = true
+        }
     }
 }
 

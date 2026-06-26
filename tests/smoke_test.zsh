@@ -27,15 +27,21 @@ STATUS_FILE="${TEST_ROOT}/status.plist"
 
 command mkdir -p \
   "${TEST_ROOT}/source/100CAMERA/subfolder" \
+  "${TEST_ROOT}/source/PRIVATE/VIDEO" \
+  "${TEST_ROOT}/source/AUDIO" \
   "${TEST_ROOT}/source/.hidden" \
   "${TEST_ROOT}/destination"
 
 print -r -- "raw image" > "${TEST_ROOT}/source/100CAMERA/IMAGE_0001.Cr3"
 print -r -- "jpeg image" > "${TEST_ROOT}/source/100CAMERA/subfolder/IMAGE_0002.JPEG"
+print -r -- "video clip" > "${TEST_ROOT}/source/PRIVATE/VIDEO/CLIP_0001.MOV"
+print -r -- "audio clip" > "${TEST_ROOT}/source/AUDIO/SOUND_0001.WAV"
 print -r -- "not an image" > "${TEST_ROOT}/source/100CAMERA/notes.txt"
 print -r -- "hidden image" > "${TEST_ROOT}/source/.hidden/IMAGE_9999.JPG"
 /usr/bin/touch -t 202501020908.07 "${TEST_ROOT}/source/100CAMERA/IMAGE_0001.Cr3"
 /usr/bin/touch -t 202602031011.12 "${TEST_ROOT}/source/100CAMERA/subfolder/IMAGE_0002.JPEG"
+/usr/bin/touch -t 202602031011.13 "${TEST_ROOT}/source/PRIVATE/VIDEO/CLIP_0001.MOV"
+/usr/bin/touch -t 202602031011.14 "${TEST_ROOT}/source/AUDIO/SOUND_0001.WAV"
 
 prepare_runtime || fail "runtime setup"
 normalize_capture_date "1970-01-01 00:00:00" &&
@@ -52,6 +58,8 @@ write_status "importing" "Importing two photos" 2 "${TEST_ROOT}/destination" ||
 
 /usr/bin/plutil -create xml1 "$CONFIG_FILE"
 /usr/bin/plutil -insert destinationRoot -string "${TEST_ROOT}/destination" "$CONFIG_FILE"
+/usr/bin/plutil -insert workflowPreset -string "hybrid-production" "$CONFIG_FILE"
+/usr/bin/plutil -insert mediaMode -string "photos-and-videos" "$CONFIG_FILE"
 /usr/bin/plutil -insert organizationMode -string "shoots" "$CONFIG_FILE"
 /usr/bin/plutil -insert dateFolderStyle -string "year-date" "$CONFIG_FILE"
 /usr/bin/plutil -insert shootFolderStyle -string "time-volume" "$CONFIG_FILE"
@@ -71,6 +79,8 @@ load_configuration || fail "configuration loading"
 
 [[ "$DESTINATION_ROOT" == "${TEST_ROOT}/destination" ]] ||
   fail "destination configuration"
+[[ "$WORKFLOW_PRESET" == "ingest-village" ]] || fail "workflow preset configuration"
+[[ "$MEDIA_MODE" == "photos-and-videos" ]] || fail "media mode configuration"
 [[ "$ORGANIZATION_MODE" == "shoots" ]] || fail "organization configuration"
 [[ "$DATE_FOLDER_STYLE" == "year-date" ]] || fail "date style configuration"
 [[ "$SHOOT_FOLDER_STYLE" == "time-volume" ]] || fail "shoot style configuration"
@@ -118,10 +128,23 @@ build_destination "EXAMPLE CARD" || fail "daily destination building"
 
 EXIFTOOL_PATH=""
 classify_images_by_date "${TEST_ROOT}/source" || fail "image classification"
-[[ "$SCAN_COUNT" == "2" ]] || fail "expected two visible images, found ${SCAN_COUNT}"
+[[ "$SCAN_COUNT" == "4" ]] || fail "expected four visible media files, found ${SCAN_COUNT}"
+[[ "$MEDIA_PHOTO_COUNT" == "2" ]] || fail "expected two photo files"
+[[ "$MEDIA_VIDEO_COUNT" == "1" ]] || fail "expected one video file"
+[[ "$MEDIA_AUDIO_COUNT" == "1" ]] || fail "expected one audio file"
 [[ "${#DATE_KEYS[@]}" == "2" ]] || fail "expected two capture dates"
 [[ "${DATE_COUNTS[2025-01-02]}" == "1" ]] || fail "first capture date"
-[[ "${DATE_COUNTS[2026-02-03]}" == "1" ]] || fail "second capture date"
+[[ "${DATE_COUNTS[2026-02-03]}" == "3" ]] || fail "second capture date"
+[[ "${DATE_PHOTO_COUNTS[2026-02-03]}" == "1" ]] || fail "second date photo count"
+[[ "${DATE_VIDEO_COUNTS[2026-02-03]}" == "1" ]] || fail "second date video count"
+[[ "${DATE_AUDIO_COUNTS[2026-02-03]}" == "1" ]] || fail "second date audio count"
+
+create_workflow_scaffold "${TEST_ROOT}/destination/scaffold" ||
+  fail "workflow scaffold creation"
+[[ -d "${TEST_ROOT}/destination/scaffold/01_Media/Photos" ]] ||
+  fail "hybrid scaffold photos directory"
+[[ -d "${TEST_ROOT}/destination/scaffold/01_Media/Video" ]] ||
+  fail "hybrid scaffold video directory"
 
 manifest="${DATE_MANIFESTS[2025-01-02]}"
 run_rsync_manifest \
@@ -159,8 +182,8 @@ CAPTURE_DATE="2026-01-02"
 CAPTURE_TIME="09-08-07"
 CAMERA_MODEL='Example "Camera"'
 ORGANIZATION_MODE="daily"
-SCAN_COUNT=2
-SCAN_BYTES=20
+SCAN_COUNT=4
+SCAN_BYTES=40
 write_sidecar \
   "${TEST_ROOT}/destination" \
   "EXAMPLE_CARD" \
@@ -173,17 +196,20 @@ sidecar=("${TEST_ROOT}/destination"/photo-import-*.json(N))
   fail "sidecar JSON syntax"
 
 DATE_KEYS=(2026-01-02)
+MEDIA_PHOTO_COUNT=2
+MEDIA_VIDEO_COUNT=1
+MEDIA_AUDIO_COUNT=1
 write_shared_import_manifest \
   "complete" \
   "EXAMPLE_CARD" \
   "${TEST_ROOT}/destination" \
   "2026-01-03T12:34:56-05:00" \
   1 \
-  2 \
-  2 \
-  2 \
-  20 \
-  20 \
+  4 \
+  4 \
+  4 \
+  40 \
+  40 \
   "passed" || fail "shared manifest creation"
 
 shared_manifest=("${TEST_ROOT}/destination/.cardy-imports"/*.json(N))

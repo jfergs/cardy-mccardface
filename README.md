@@ -1,7 +1,7 @@
 # Cardy McCardface
 
 Cardy McCardface is a native macOS menu-bar application that automatically
-imports photos from removable camera cards.
+imports photo, video, and audio media from removable camera cards.
 
 The app watches for newly mounted volumes, runs the bundled `zsh`/`rsync`
 importer, verifies copied files, reports progress through Notification Center,
@@ -12,6 +12,9 @@ and optionally ejects the card.
 - Native macOS menu-bar application
 - Automatic detection of mounted camera cards
 - Destination-folder picker and settings window
+- Workflow presets for personal archives, Capture One, Adobe, video production,
+  hybrid production, and ingest villages
+- Photo-only, video/audio-only, or hybrid media modes
 - One folder per day or multiple shoots per day
 - Configurable date layouts:
   - `YYYY/YYYY-MM-DD`
@@ -84,10 +87,16 @@ Cardy subscribes to macOS workspace mount notifications and runs an initial scan
 when the app launches. A removable volume is considered a camera card if it has
 a `DCIM` directory or contains a supported image.
 
-Supported extensions:
+Photo extensions:
 
 ```text
 CR3 CR2 NEF ARW RAF ORF RW2 DNG JPG JPEG HEIC PNG TIF TIFF
+```
+
+Video/audio extensions used by video or hybrid media modes:
+
+```text
+MOV MP4 MXF MTS M2TS R3D BRAW CRM WAV AIFF AIF MP3
 ```
 
 Hidden files and hidden directories are ignored.
@@ -108,6 +117,68 @@ DESTINATION_ROOT/YYYY/YYYY-MM-DD/
 ```
 
 Separate-shoot mode adds a timestamped shoot directory beneath the date.
+
+## Workflow presets
+
+The settings window includes workflow presets:
+
+- Personal Photo Archive
+- Capture One Session
+- Adobe Lightroom / Bridge
+- Premiere / Resolve Video
+- Hybrid Photo + Video
+- Ingest Village
+
+Presets apply conservative defaults for media mode, folder organization,
+checksum behavior, and production safety. They do not launch creative apps or
+mount network shares.
+
+Capture One presets create:
+
+```text
+Capture/
+Selects/
+Output/
+Trash/
+Cardy Import Reports/
+```
+
+Adobe photo presets create:
+
+```text
+01_Photos/
+02_Lightroom_Bridge/
+03_Edits/
+04_Exports/
+05_Reports/
+```
+
+Video production presets create:
+
+```text
+01_Media/Video/
+01_Media/Audio/
+02_Project_Files/
+03_Proxies/
+04_Exports/
+05_Reports/
+```
+
+Hybrid and Ingest Village presets create:
+
+```text
+01_Media/Photos/
+01_Media/Video/
+01_Media/Audio/
+02_Capture_One/
+03_Adobe/
+04_Proxies/
+05_Exports/
+06_Reports/
+```
+
+The original card directory structure is still preserved under the import
+destination. Scaffold folders are created as production handoff structure.
 
 ## Ingest Village mode
 
@@ -209,14 +280,13 @@ done
 
 ## Roadmap
 
-The ingest-village work is being built in staged sprints:
+The production workflow work is being built in staged sprints:
 
 1. Multi-station foundation: station identity, shared status, shared manifests,
    shared locks, destination preflight.
-2. Production folder presets: Capture One session, Adobe/Bridge/Lightroom,
-   Premiere/Resolve, and hybrid photo/video layouts.
-3. Media expansion: video/audio extensions, full-card video preservation, and
-   per-media manifests.
+2. Production folder presets and media modes: Capture One, Adobe, video, and
+   hybrid layouts with photo/video/audio file classification.
+3. Full-card video preservation and richer per-media manifests.
 4. Post-import handoff: reveal/open destination, launch Capture One or Adobe
    apps, and optional watched-folder integration.
 5. Shared dashboard: read `.cardy-status` and `.cardy-imports` files to show a

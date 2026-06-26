@@ -10,6 +10,9 @@
 DESTINATION_ROOT="${HOME}/Pictures/CardyMcCardface Imports"
 AUTO_EJECT=false
 SUPPORTED_EXTENSIONS=(CR3 CR2 NEF ARW RAF ORF RW2 DNG JPG JPEG HEIC PNG TIF TIFF)
+PHOTO_EXTENSIONS=(CR3 CR2 NEF ARW RAF ORF RW2 DNG JPG JPEG HEIC PNG TIF TIFF)
+VIDEO_EXTENSIONS=(MOV MP4 MXF MTS M2TS R3D BRAW CRM)
+AUDIO_EXTENSIONS=(WAV AIFF AIF MP3)
 LOGFILE="${HOME}/Library/Logs/CardyMcCardface.log"
 DRY_RUN=true
 NOTIFICATIONS_ENABLED=true
@@ -18,6 +21,8 @@ NOTIFICATIONS_ENABLED=true
 CHECKSUM_VERIFY=false
 EXCLUDED_VOLUMES=("/Volumes/PhotoNAS" "/Volumes/Macintosh HD")
 MIN_CARD_SIZE_GB=0
+WORKFLOW_PRESET="personal-photo"
+MEDIA_MODE="photos-only"
 ORGANIZATION_MODE="daily"
 DATE_FOLDER_STYLE="year-date"
 SHOOT_FOLDER_STYLE="time-volume"
@@ -54,9 +59,15 @@ typeset -A DATE_COUNTS
 typeset -A DATE_BYTES
 typeset -A DATE_TIMES
 typeset -A DATE_CAMERAS
+typeset -A DATE_PHOTO_COUNTS
+typeset -A DATE_VIDEO_COUNTS
+typeset -A DATE_AUDIO_COUNTS
 typeset EXIFTOOL_PATH=""
 typeset MDLS_ENABLED=true
 typeset -a ACTIVE_SHARED_LOCKS
+typeset MEDIA_PHOTO_COUNT=0
+typeset MEDIA_VIDEO_COUNT=0
+typeset MEDIA_AUDIO_COUNT=0
 
 ###############################################################################
 # General helpers
@@ -346,6 +357,21 @@ load_configuration() {
     return 1
   fi
 
+  value="$(config_value workflowPreset)"
+  case "$value" in
+    personal-photo|capture-one|adobe-photo|video-production|hybrid-production|ingest-village)
+      WORKFLOW_PRESET="$value"
+      ;;
+    "") WORKFLOW_PRESET="personal-photo" ;;
+    *) log ERROR "Unsupported workflowPreset in configuration: $value"; return 1 ;;
+  esac
+  value="$(config_value mediaMode)"
+  case "$value" in
+    photos-only|videos-only|photos-and-videos) MEDIA_MODE="$value" ;;
+    "") MEDIA_MODE="photos-only" ;;
+    *) log ERROR "Unsupported mediaMode in configuration: $value"; return 1 ;;
+  esac
+
   value="$(config_value ingestVillageMode)"
   case "$value" in
     true|false) INGEST_VILLAGE_MODE="$value" ;;
@@ -393,6 +419,8 @@ load_configuration() {
   fi
 
   if bool_is_true "$INGEST_VILLAGE_MODE"; then
+    WORKFLOW_PRESET="ingest-village"
+    MEDIA_MODE="photos-and-videos"
     ORGANIZATION_MODE="shoots"
     CHECKSUM_VERIFY=true
     AUTO_EJECT=false
@@ -609,13 +637,39 @@ preflight_destination_root() {
 
 is_supported_image() {
   local path="$1"
+  media_kind_for_path "$path" >/dev/null
+}
+
+media_kind_for_path() {
+  local path="$1"
   local name="${path:t}"
   local extension
 
   [[ "$name" == .* ]] && return 1
   [[ "$name" == *.* ]] || return 1
   extension="${name:e:u}"
-  (( ${SUPPORTED_EXTENSIONS[(Ie)$extension]} > 0 ))
+  if (( ${PHOTO_EXTENSIONS[(Ie)$extension]} > 0 )); then
+    [[ "$MEDIA_MODE" == "videos-only" ]] && return 1
+    REPLY="photo"
+    return 0
+  fi
+  if (( ${VIDEO_EXTENSIONS[(Ie)$extension]} > 0 )); then
+    [[ "$MEDIA_MODE" == "photos-only" ]] && return 1
+    REPLY="video"
+    return 0
+  fi
+  if (( ${AUDIO_EXTENSIONS[(Ie)$extension]} > 0 )); then
+    [[ "$MEDIA_MODE" == "photos-only" ]] && return 1
+    REPLY="audio"
+    return 0
+  fi
+  return 1
+}
+
+metadata_supported_for_path() {
+  local path="$1"
+  media_kind_for_path "$path" || return 1
+  [[ "$REPLY" == "photo" ]]
 }
 
 find_dcim_root() {
@@ -655,7 +709,7 @@ scan_images() {
 
 classify_images_by_date() {
   local source_root="$1"
-  local file relative file_size manifest
+  local file relative file_size manifest media_kind
   local total_count=0
   local total_bytes=0
   local first=""
@@ -666,15 +720,26 @@ classify_images_by_date() {
   DATE_BYTES=()
   DATE_TIMES=()
   DATE_CAMERAS=()
+  DATE_PHOTO_COUNTS=()
+  DATE_VIDEO_COUNTS=()
+  DATE_AUDIO_COUNTS=()
+  MEDIA_PHOTO_COUNT=0
+  MEDIA_VIDEO_COUNT=0
+  MEDIA_AUDIO_COUNT=0
 
   while IFS= read -r -d $'\0' file; do
-    is_supported_image "$file" || continue
+    media_kind_for_path "$file" || continue
+    media_kind="$REPLY"
     if [[ "$file" == *$'\n'* || "$file" == *$'\r'* ]]; then
       log WARN "Skipping filename containing a line break: $file"
       continue
     fi
 
-    determine_capture_metadata "$file"
+    if metadata_supported_for_path "$file"; then
+      determine_capture_metadata "$file"
+    else
+      determine_capture_metadata_from_file "$file"
+    fi
     relative="${file#"${source_root}/"}"
     [[ -n "$first" ]] || first="$relative"
     manifest="${DATE_MANIFESTS[$CAPTURE_DATE]:-}"
@@ -686,6 +751,9 @@ classify_images_by_date() {
       DATE_BYTES[$CAPTURE_DATE]=0
       DATE_TIMES[$CAPTURE_DATE]="$CAPTURE_TIME"
       DATE_CAMERAS[$CAPTURE_DATE]="$CAMERA_MODEL"
+      DATE_PHOTO_COUNTS[$CAPTURE_DATE]=0
+      DATE_VIDEO_COUNTS[$CAPTURE_DATE]=0
+      DATE_AUDIO_COUNTS[$CAPTURE_DATE]=0
       DATE_KEYS+=("$CAPTURE_DATE")
     fi
 
@@ -694,6 +762,20 @@ classify_images_by_date() {
     [[ "$file_size" =~ ^[0-9]+$ ]] || file_size=0
     DATE_COUNTS[$CAPTURE_DATE]=$(( DATE_COUNTS[$CAPTURE_DATE] + 1 ))
     DATE_BYTES[$CAPTURE_DATE]=$(( DATE_BYTES[$CAPTURE_DATE] + file_size ))
+    case "$media_kind" in
+      photo)
+        DATE_PHOTO_COUNTS[$CAPTURE_DATE]=$(( DATE_PHOTO_COUNTS[$CAPTURE_DATE] + 1 ))
+        (( MEDIA_PHOTO_COUNT++ ))
+        ;;
+      video)
+        DATE_VIDEO_COUNTS[$CAPTURE_DATE]=$(( DATE_VIDEO_COUNTS[$CAPTURE_DATE] + 1 ))
+        (( MEDIA_VIDEO_COUNT++ ))
+        ;;
+      audio)
+        DATE_AUDIO_COUNTS[$CAPTURE_DATE]=$(( DATE_AUDIO_COUNTS[$CAPTURE_DATE] + 1 ))
+        (( MEDIA_AUDIO_COUNT++ ))
+        ;;
+    esac
     (( total_count++ ))
     (( total_bytes += file_size ))
   done < <(/usr/bin/find "$source_root" -type d -name '.*' -prune -o -type f -print0 2>/dev/null)
@@ -789,6 +871,18 @@ determine_capture_metadata() {
     CAPTURE_TIME="$(command date '+%H-%M-%S')"
 }
 
+determine_capture_metadata_from_file() {
+  local file="$1"
+
+  CAPTURE_DATE="$(/usr/bin/stat -f '%SB' -t '%Y-%m-%d' "$file" 2>/dev/null)"
+  CAPTURE_TIME="$(/usr/bin/stat -f '%SB' -t '%H-%M-%S' "$file" 2>/dev/null)"
+  CAMERA_MODEL=""
+  [[ "$CAPTURE_DATE" == [0-9]##-[0-9][0-9]-[0-9][0-9] ]] ||
+    CAPTURE_DATE="$(command date '+%Y-%m-%d')"
+  [[ "$CAPTURE_TIME" == [0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]] ||
+    CAPTURE_TIME="$(command date '+%H-%M-%S')"
+}
+
 build_destination() {
   local volume_name="$1"
   local year="${CAPTURE_DATE[1,4]}"
@@ -817,6 +911,52 @@ build_destination() {
   fi
 
   REPLY="${DESTINATION_ROOT}/${relative}"
+}
+
+create_workflow_scaffold() {
+  local destination="$1"
+
+  case "$WORKFLOW_PRESET" in
+    capture-one)
+      command mkdir -p \
+        "${destination}/Capture" \
+        "${destination}/Selects" \
+        "${destination}/Output" \
+        "${destination}/Trash" \
+        "${destination}/Cardy Import Reports"
+      ;;
+    adobe-photo)
+      command mkdir -p \
+        "${destination}/01_Photos" \
+        "${destination}/02_Lightroom_Bridge" \
+        "${destination}/03_Edits" \
+        "${destination}/04_Exports" \
+        "${destination}/05_Reports"
+      ;;
+    video-production)
+      command mkdir -p \
+        "${destination}/01_Media/Video" \
+        "${destination}/01_Media/Audio" \
+        "${destination}/02_Project_Files" \
+        "${destination}/03_Proxies" \
+        "${destination}/04_Exports" \
+        "${destination}/05_Reports"
+      ;;
+    hybrid-production|ingest-village)
+      command mkdir -p \
+        "${destination}/01_Media/Photos" \
+        "${destination}/01_Media/Video" \
+        "${destination}/01_Media/Audio" \
+        "${destination}/02_Capture_One" \
+        "${destination}/03_Adobe" \
+        "${destination}/04_Proxies" \
+        "${destination}/05_Exports" \
+        "${destination}/06_Reports"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
 }
 
 build_rsync_filters() {
@@ -977,7 +1117,12 @@ write_sidecar() {
     print -r -- "  \"capture_date\": \"$(json_escape "$CAPTURE_DATE")\","
     print -r -- "  \"capture_time\": \"$(json_escape "$CAPTURE_TIME")\","
     print -r -- "  \"source_volume\": \"$(json_escape "$volume_name")\","
+    print -r -- "  \"workflow_preset\": \"$(json_escape "$WORKFLOW_PRESET")\","
+    print -r -- "  \"media_mode\": \"$(json_escape "$MEDIA_MODE")\","
     print -r -- "  \"organization_mode\": \"$(json_escape "$ORGANIZATION_MODE")\","
+    print -r -- "  \"photo_files\": ${MEDIA_PHOTO_COUNT},"
+    print -r -- "  \"video_files\": ${MEDIA_VIDEO_COUNT},"
+    print -r -- "  \"audio_files\": ${MEDIA_AUDIO_COUNT},"
     print -r -- "  \"files\": ${SCAN_COUNT},"
     print -r -- "  \"bytes\": ${SCAN_BYTES},"
     print -r -- "  \"import_duration_seconds\": ${elapsed},"
@@ -1027,10 +1172,15 @@ write_shared_import_manifest() {
     print -r -- "  \"operator\": \"$(json_escape "$OPERATOR_NAME")\","
     print -r -- "  \"source_volume\": \"$(json_escape "$volume_name")\","
     print -r -- "  \"destination_root\": \"$(json_escape "$destination_root")\","
+    print -r -- "  \"workflow_preset\": \"$(json_escape "$WORKFLOW_PRESET")\","
+    print -r -- "  \"media_mode\": \"$(json_escape "$MEDIA_MODE")\","
     print -r -- "  \"organization_mode\": \"$(json_escape "$ORGANIZATION_MODE")\","
     print -r -- "  \"date_folder_style\": \"$(json_escape "$DATE_FOLDER_STYLE")\","
     print -r -- "  \"shoot_folder_style\": \"$(json_escape "$SHOOT_FOLDER_STYLE")\","
     print -r -- "  \"capture_dates\": ${#DATE_KEYS[@]},"
+    print -r -- "  \"photo_files\": ${MEDIA_PHOTO_COUNT},"
+    print -r -- "  \"video_files\": ${MEDIA_VIDEO_COUNT},"
+    print -r -- "  \"audio_files\": ${MEDIA_AUDIO_COUNT},"
     print -r -- "  \"source_files\": ${source_files},"
     print -r -- "  \"copied_files\": ${copied_files},"
     print -r -- "  \"verified_files\": ${verified_files},"
@@ -1204,6 +1354,11 @@ process_volume() {
 
     if ! command mkdir -p "$destination"; then
       log ERROR "Could not create destination: $destination"
+      overall_status=1
+      continue
+    fi
+    if ! create_workflow_scaffold "$destination"; then
+      log ERROR "Could not create workflow scaffold: $destination"
       overall_status=1
       continue
     fi
