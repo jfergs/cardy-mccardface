@@ -16,6 +16,7 @@ and optionally ejects the card.
   hybrid production, and ingest villages
 - Photo-only, video/audio-only, or hybrid media modes
 - Optional full visible card preservation for video and hybrid workflows
+- Ready handoff files after successful verification
 - One folder per day or multiple shoots per day
 - Configurable date layouts:
   - `YYYY/YYYY-MM-DD`
@@ -74,6 +75,9 @@ The menu displays:
 - Scan Mounted Volumes;
 - Open Import Log;
 - Reveal Destination;
+- Reveal Last Import;
+- Open Last Import Report;
+- Open Shared Status Folder;
 - Launch at Login;
 - Quit.
 
@@ -214,6 +218,8 @@ DESTINATION_ROOT/
   .cardy-imports/
     2026-06-25T14-33-18-04-00_Ingest-01_EOS_DIGITAL.json
     2026-06-25T14-33-18-04-00_Ingest-01_EOS_DIGITAL.files.jsonl
+  .cardy-ready/
+    2026-06-25T14-33-18-04-00_Ingest-01_EOS_DIGITAL.ready.json
   .cardy-locks/
     card-fingerprint.lock/
 ```
@@ -236,6 +242,11 @@ exists, is writable, and meets the configured free-space threshold.
 Shared summary manifests include workflow preset, media mode, media counts,
 preserved-file counts, first/last capture timestamps, and card fingerprint.
 The `.files.jsonl` manifest contains one JSON object per imported relative path.
+
+After successful verification, Cardy writes a `.cardy-ready/*.ready.json` file.
+This is the handoff signal that editors, dashboards, or automation can treat the
+import as safe to use. The local status file also records the last import
+destination and last ready report so the menu-bar app can reveal them quickly.
 
 ## Configuration and state
 

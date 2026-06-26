@@ -36,6 +36,7 @@ SHARED_STATUS_DIR=""
 SHARED_MANIFEST_DIR=""
 SHARED_LOCK_DIR=""
 PRESERVE_FULL_CARD_FOR_VIDEO=false
+REVEAL_AFTER_IMPORT=false
 MIN_FREE_SPACE_GB=0
 MAX_LOG_BYTES=10485760
 LOG_BACKUPS=5
@@ -74,6 +75,8 @@ typeset FIRST_CAPTURE_AT=""
 typeset LAST_CAPTURE_AT=""
 typeset CARD_FINGERPRINT=""
 typeset FILE_MANIFEST=""
+typeset LAST_IMPORT_DESTINATION=""
+typeset LAST_IMPORT_REPORT=""
 
 ###############################################################################
 # General helpers
@@ -151,6 +154,9 @@ write_status() {
   local message="$2"
   local file_count="${3:-0}"
   local destination="${4:-}"
+  local last_import_destination="${5:-}"
+  local last_import_report="${6:-}"
+  local shared_status_dir="${7:-}"
   local status_dir="${STATUS_FILE:h}"
   local temporary="${status_dir}/status.plist.tmp.$$"
 
@@ -161,6 +167,9 @@ write_status() {
   /usr/bin/plutil -insert message -string "$message" "$temporary"
   /usr/bin/plutil -insert fileCount -integer "$file_count" "$temporary"
   /usr/bin/plutil -insert destination -string "$destination" "$temporary"
+  /usr/bin/plutil -insert lastImportDestination -string "$last_import_destination" "$temporary"
+  /usr/bin/plutil -insert lastImportReport -string "$last_import_report" "$temporary"
+  /usr/bin/plutil -insert sharedStatusDir -string "$shared_status_dir" "$temporary"
   /usr/bin/plutil -insert updatedAt -string "$(iso_timestamp)" "$temporary"
   command chmod 600 "$temporary"
   command mv -f "$temporary" "$STATUS_FILE"
@@ -420,6 +429,12 @@ load_configuration() {
     "") PRESERVE_FULL_CARD_FOR_VIDEO=false ;;
     *) log ERROR "preserveFullCardForVideo must be a boolean"; return 1 ;;
   esac
+  value="$(config_value revealAfterImport)"
+  case "$value" in
+    true|false) REVEAL_AFTER_IMPORT="$value" ;;
+    "") REVEAL_AFTER_IMPORT=false ;;
+    *) log ERROR "revealAfterImport must be a boolean"; return 1 ;;
+  esac
   value="$(config_value minFreeSpaceGB)"
   if [[ -z "$value" ]]; then
     MIN_FREE_SPACE_GB=0
@@ -436,6 +451,7 @@ load_configuration() {
     ORGANIZATION_MODE="shoots"
     CHECKSUM_VERIFY=true
     PRESERVE_FULL_CARD_FOR_VIDEO=true
+    REVEAL_AFTER_IMPORT=false
     AUTO_EJECT=false
     [[ -n "$SHARED_STATUS_DIR" ]] || SHARED_STATUS_DIR="${DESTINATION_ROOT}/.cardy-status"
     [[ -n "$SHARED_MANIFEST_DIR" ]] || SHARED_MANIFEST_DIR="${DESTINATION_ROOT}/.cardy-imports"
@@ -1317,6 +1333,64 @@ write_shared_file_manifest() {
   log INFO "Shared file manifest written: $output"
 }
 
+write_ready_handoff() {
+  local state="$1"
+  local volume_name="$2"
+  local imported_at="$3"
+  local elapsed="$4"
+  local source_files="$5"
+  local verified_files="$6"
+  local directory safe_station safe_volume ready_file temp_ready
+
+  [[ "$state" == "complete" ]] || return 0
+  directory="${DESTINATION_ROOT}/.cardy-ready"
+  command mkdir -p "$directory" || return 1
+  safe_station="$(sanitize_component "$STATION_NAME")"
+  safe_volume="$(sanitize_component "$volume_name")"
+  ready_file="${directory}/${imported_at//[:+]/-}_${safe_station}_${safe_volume}.ready.json"
+  temp_ready="${ready_file}.tmp.$$"
+
+  {
+    print -r -- "{"
+    print -r -- "  \"ready_at\": \"$(json_escape "$(iso_timestamp)")\","
+    print -r -- "  \"imported_at\": \"$(json_escape "$imported_at")\","
+    print -r -- "  \"state\": \"ready\","
+    print -r -- "  \"station_name\": \"$(json_escape "$STATION_NAME")\","
+    print -r -- "  \"operator\": \"$(json_escape "$OPERATOR_NAME")\","
+    print -r -- "  \"source_volume\": \"$(json_escape "$volume_name")\","
+    print -r -- "  \"destination_root\": \"$(json_escape "$DESTINATION_ROOT")\","
+    print -r -- "  \"workflow_preset\": \"$(json_escape "$WORKFLOW_PRESET")\","
+    print -r -- "  \"media_mode\": \"$(json_escape "$MEDIA_MODE")\","
+    print -r -- "  \"source_files\": ${source_files},"
+    print -r -- "  \"verified_files\": ${verified_files},"
+    print -r -- "  \"photo_files\": ${MEDIA_PHOTO_COUNT},"
+    print -r -- "  \"video_files\": ${MEDIA_VIDEO_COUNT},"
+    print -r -- "  \"audio_files\": ${MEDIA_AUDIO_COUNT},"
+    print -r -- "  \"other_preserved_files\": ${MEDIA_OTHER_COUNT},"
+    print -r -- "  \"duration_seconds\": ${elapsed},"
+    print -r -- "  \"card_fingerprint\": \"$(json_escape "$CARD_FINGERPRINT")\""
+    print -r -- "}"
+  } > "$temp_ready"
+  command mv -f "$temp_ready" "$ready_file"
+  LAST_IMPORT_REPORT="$ready_file"
+  log INFO "Ready handoff written: $ready_file"
+}
+
+reveal_import_destination() {
+  local destination="$1"
+
+  bool_is_true "$REVEAL_AFTER_IMPORT" || return 0
+  [[ -n "$destination" && -d "$destination" ]] || return 0
+  /usr/bin/osascript - "$destination" >/dev/null 2>&1 <<'APPLESCRIPT'
+on run argv
+  tell application "Finder"
+    reveal POSIX file (item 1 of argv)
+    activate
+  end tell
+end run
+APPLESCRIPT
+}
+
 eject_volume() {
   local volume="$1"
   if /usr/sbin/diskutil eject "$volume" >> "$LOGFILE" 2>&1; then
@@ -1556,9 +1630,12 @@ process_volume() {
 
   if (( overall_status == 0 && total_verified == total_count )); then
     final_verification="passed"
+    LAST_IMPORT_DESTINATION="$DESTINATION_ROOT"
+    write_ready_handoff "complete" "$volume_name" "$imported_at" "$elapsed" \
+      "$total_count" "$total_verified" || true
     log INFO "Import complete: source=$volume destination_root=$DESTINATION_ROOT capture_dates=${#sorted_dates[@]} copied=$total_copied source_files=$total_count verified_files=$total_verified elapsed_seconds=$elapsed speed_mib_per_second=$speed_mib verification=passed"
     write_status "active" "Import complete: ${total_count} files across ${#sorted_dates[@]} dates" \
-      "$total_count" "$DESTINATION_ROOT" || true
+      "$total_count" "$DESTINATION_ROOT" "$LAST_IMPORT_DESTINATION" "$LAST_IMPORT_REPORT" "$SHARED_STATUS_DIR" || true
     write_shared_status "active" "Import complete: ${total_count} files across ${#sorted_dates[@]} dates" \
       "$total_count" "$DESTINATION_ROOT" "$volume_name" || true
     write_shared_import_manifest "complete" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
@@ -1568,6 +1645,7 @@ process_volume() {
     preserve_original_file_manifest="$FILE_MANIFEST"
     FILE_MANIFEST=""
     notify "Import complete" "${total_count} files sorted into ${#sorted_dates[@]} date folders"
+    reveal_import_destination "$LAST_IMPORT_DESTINATION"
     bool_is_true "$AUTO_EJECT" && eject_volume "$volume"
     remove_date_manifests
     command rm -f "$preserve_original_file_manifest"

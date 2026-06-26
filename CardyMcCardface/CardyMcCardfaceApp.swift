@@ -96,6 +96,7 @@ private struct CardyConfiguration {
     var checksumVerify = false
     var dryRun = true
     var notificationsEnabled = true
+    var revealAfterImport = false
     var minCardSizeGB = 0
     var ingestVillageMode = false
     var stationName = Host.current().localizedName ?? "CardyStation"
@@ -140,6 +141,9 @@ private struct CardyConfiguration {
         configuration.notificationsEnabled =
             dictionary["notificationsEnabled"] as? Bool
                 ?? configuration.notificationsEnabled
+        configuration.revealAfterImport =
+            dictionary["revealAfterImport"] as? Bool
+                ?? configuration.revealAfterImport
         configuration.minCardSizeGB =
             dictionary["minCardSizeGB"] as? Int ?? configuration.minCardSizeGB
         configuration.ingestVillageMode =
@@ -177,6 +181,7 @@ private struct CardyConfiguration {
             "checksumVerify": checksumVerify,
             "dryRun": dryRun,
             "notificationsEnabled": notificationsEnabled,
+            "revealAfterImport": revealAfterImport,
             "minCardSizeGB": minCardSizeGB,
             "ingestVillageMode": ingestVillageMode,
             "stationName": stationName,
@@ -230,6 +235,7 @@ private final class SettingsWindowController: NSWindowController {
     private let checksumButton = NSButton(checkboxWithTitle: "Checksum verification", target: nil, action: nil)
     private let dryRunButton = NSButton(checkboxWithTitle: "Dry run — do not copy files", target: nil, action: nil)
     private let notificationsButton = NSButton(checkboxWithTitle: "Show macOS notifications", target: nil, action: nil)
+    private let revealAfterImportButton = NSButton(checkboxWithTitle: "Reveal destination after successful import", target: nil, action: nil)
     private let ingestVillageButton = NSButton(checkboxWithTitle: "Ingest Village mode", target: nil, action: nil)
     private let stationNameField = NSTextField()
     private let operatorNameField = NSTextField()
@@ -314,6 +320,7 @@ private final class SettingsWindowController: NSWindowController {
             checksumButton,
             dryRunButton,
             notificationsButton,
+            revealAfterImportButton,
             ingestVillageButton,
             sharedStatusButton,
             sharedManifestButton,
@@ -362,6 +369,7 @@ private final class SettingsWindowController: NSWindowController {
         checksumButton.state = configuration.checksumVerify ? .on : .off
         dryRunButton.state = configuration.dryRun ? .on : .off
         notificationsButton.state = configuration.notificationsEnabled ? .on : .off
+        revealAfterImportButton.state = configuration.revealAfterImport ? .on : .off
         minimumSizeField.integerValue = configuration.minCardSizeGB
         ingestVillageButton.state = configuration.ingestVillageMode ? .on : .off
         stationNameField.stringValue = configuration.stationName
@@ -422,6 +430,7 @@ private final class SettingsWindowController: NSWindowController {
         configuration.checksumVerify = checksumButton.state == .on
         configuration.dryRun = dryRunButton.state == .on
         configuration.notificationsEnabled = notificationsButton.state == .on
+        configuration.revealAfterImport = revealAfterImportButton.state == .on
         configuration.minCardSizeGB = minimumSize
         configuration.ingestVillageMode = ingestVillageButton.state == .on
         configuration.stationName =
@@ -443,6 +452,7 @@ private final class SettingsWindowController: NSWindowController {
             configuration.sharedStatusEnabled = true
             configuration.sharedManifestEnabled = true
             configuration.sharedLocksEnabled = true
+            configuration.revealAfterImport = false
         }
 
         do {
@@ -485,6 +495,7 @@ private final class SettingsWindowController: NSWindowController {
             configuration.autoEject = false
             configuration.checksumVerify = true
             configuration.preserveFullCardForVideo = true
+            configuration.revealAfterImport = false
         case .hybridProduction:
             configuration.mediaMode = .photosAndVideos
             configuration.organizationMode = .shoots
@@ -492,6 +503,7 @@ private final class SettingsWindowController: NSWindowController {
             configuration.autoEject = false
             configuration.checksumVerify = true
             configuration.preserveFullCardForVideo = true
+            configuration.revealAfterImport = false
         case .ingestVillage:
             configuration.ingestVillageMode = true
             configuration.mediaMode = .photosAndVideos
@@ -503,6 +515,7 @@ private final class SettingsWindowController: NSWindowController {
             configuration.sharedManifestEnabled = true
             configuration.sharedLocksEnabled = true
             configuration.preserveFullCardForVideo = true
+            configuration.revealAfterImport = false
         }
     }
 }
@@ -753,6 +766,35 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
         )
     }
 
+    @objc func revealLastImport() {
+        let status = dictionary(at: CardyPaths.status)
+        let fallback = CardyConfiguration.load().destinationRoot
+        let destination = status?["lastImportDestination"] as? String ?? fallback
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: destination)
+    }
+
+    @objc func openLastImportReport() {
+        guard
+            let status = dictionary(at: CardyPaths.status),
+            let report = status["lastImportReport"] as? String,
+            !report.isEmpty
+        else {
+            showAlert("No completed import report is available yet.")
+            return
+        }
+        NSWorkspace.shared.open(URL(fileURLWithPath: report))
+    }
+
+    @objc func openSharedStatusFolder() {
+        let status = dictionary(at: CardyPaths.status)
+        let configuration = CardyConfiguration.load()
+        let statusPath = status?["sharedStatusDir"] as? String
+        let folder = (statusPath?.isEmpty == false)
+            ? statusPath!
+            : "\(configuration.destinationRoot)/.cardy-status"
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: folder)
+    }
+
     @objc func quit() {
         NSApplication.shared.terminate(nil)
     }
@@ -786,6 +828,15 @@ private struct CardyMcCardfaceApp: App {
             }
             Button("Reveal Destination") {
                 appDelegate.revealDestination()
+            }
+            Button("Reveal Last Import") {
+                appDelegate.revealLastImport()
+            }
+            Button("Open Last Import Report") {
+                appDelegate.openLastImportReport()
+            }
+            Button("Open Shared Status Folder") {
+                appDelegate.openSharedStatusFolder()
             }
             Divider()
             Button(

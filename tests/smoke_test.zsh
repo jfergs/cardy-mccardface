@@ -68,6 +68,7 @@ write_status "importing" "Importing two photos" 2 "${TEST_ROOT}/destination" ||
 /usr/bin/plutil -insert checksumVerify -bool true "$CONFIG_FILE"
 /usr/bin/plutil -insert dryRun -bool false "$CONFIG_FILE"
 /usr/bin/plutil -insert notificationsEnabled -bool true "$CONFIG_FILE"
+/usr/bin/plutil -insert revealAfterImport -bool false "$CONFIG_FILE"
 /usr/bin/plutil -insert minCardSizeGB -integer 8 "$CONFIG_FILE"
 /usr/bin/plutil -insert ingestVillageMode -bool true "$CONFIG_FILE"
 /usr/bin/plutil -insert stationName -string "Ingest-01" "$CONFIG_FILE"
@@ -89,6 +90,7 @@ load_configuration || fail "configuration loading"
 [[ "$AUTO_EJECT" == "false" ]] || fail "auto eject configuration"
 [[ "$CHECKSUM_VERIFY" == "true" ]] || fail "checksum configuration"
 [[ "$NOTIFICATIONS_ENABLED" == "true" ]] || fail "notification configuration"
+[[ "$REVEAL_AFTER_IMPORT" == "false" ]] || fail "reveal after import configuration"
 [[ "$MIN_CARD_SIZE_GB" == "8" ]] || fail "minimum size configuration"
 [[ "$INGEST_VILLAGE_MODE" == "true" ]] || fail "ingest village configuration"
 [[ "$STATION_NAME" == "Ingest-01" ]] || fail "station configuration"
@@ -226,6 +228,29 @@ write_shared_import_manifest \
 write_shared_file_manifest \
   "EXAMPLE_CARD" \
   "2026-01-03T12:34:56-05:00" || fail "shared file manifest creation"
+CARD_FINGERPRINT="example-card-fingerprint"
+LAST_IMPORT_DESTINATION="${TEST_ROOT}/destination"
+write_ready_handoff \
+  "complete" \
+  "EXAMPLE_CARD" \
+  "2026-01-03T12:34:56-05:00" \
+  1 \
+  5 \
+  5 || fail "ready handoff creation"
+ready_file=("${TEST_ROOT}/destination/.cardy-ready"/*.ready.json(N))
+[[ "${#ready_file[@]}" == "1" ]] || fail "expected one ready handoff"
+/usr/bin/plutil -convert xml1 -o /dev/null "${ready_file[1]}" ||
+  fail "ready handoff JSON syntax"
+write_status \
+  "active" \
+  "Import complete" \
+  5 \
+  "${TEST_ROOT}/destination" \
+  "${TEST_ROOT}/destination" \
+  "${ready_file[1]}" \
+  "${TEST_ROOT}/destination/.cardy-status" || fail "last import status writing"
+[[ "$(/usr/bin/plutil -extract lastImportDestination raw -o - "$STATUS_FILE")" == "${TEST_ROOT}/destination" ]] ||
+  fail "last import destination status"
 
 shared_manifest=("${TEST_ROOT}/destination/.cardy-imports"/*.json(N))
 [[ "${#shared_manifest[@]}" == "1" ]] || fail "expected one shared manifest"
