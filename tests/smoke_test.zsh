@@ -60,6 +60,13 @@ write_status "importing" "Importing two photos" 2 "${TEST_ROOT}/destination" ||
 /usr/bin/plutil -insert dryRun -bool false "$CONFIG_FILE"
 /usr/bin/plutil -insert notificationsEnabled -bool true "$CONFIG_FILE"
 /usr/bin/plutil -insert minCardSizeGB -integer 8 "$CONFIG_FILE"
+/usr/bin/plutil -insert ingestVillageMode -bool true "$CONFIG_FILE"
+/usr/bin/plutil -insert stationName -string "Ingest-01" "$CONFIG_FILE"
+/usr/bin/plutil -insert operatorName -string "Smoke Test Operator" "$CONFIG_FILE"
+/usr/bin/plutil -insert sharedStatusEnabled -bool true "$CONFIG_FILE"
+/usr/bin/plutil -insert sharedManifestEnabled -bool true "$CONFIG_FILE"
+/usr/bin/plutil -insert sharedLocksEnabled -bool true "$CONFIG_FILE"
+/usr/bin/plutil -insert minFreeSpaceGB -integer 0 "$CONFIG_FILE"
 load_configuration || fail "configuration loading"
 
 [[ "$DESTINATION_ROOT" == "${TEST_ROOT}/destination" ]] ||
@@ -71,6 +78,30 @@ load_configuration || fail "configuration loading"
 [[ "$CHECKSUM_VERIFY" == "true" ]] || fail "checksum configuration"
 [[ "$NOTIFICATIONS_ENABLED" == "true" ]] || fail "notification configuration"
 [[ "$MIN_CARD_SIZE_GB" == "8" ]] || fail "minimum size configuration"
+[[ "$INGEST_VILLAGE_MODE" == "true" ]] || fail "ingest village configuration"
+[[ "$STATION_NAME" == "Ingest-01" ]] || fail "station configuration"
+[[ "$OPERATOR_NAME" == "Smoke Test Operator" ]] || fail "operator configuration"
+[[ "$SHARED_STATUS_ENABLED" == "true" ]] || fail "shared status configuration"
+[[ "$SHARED_MANIFEST_ENABLED" == "true" ]] || fail "shared manifest configuration"
+[[ "$SHARED_LOCKS_ENABLED" == "true" ]] || fail "shared locks configuration"
+[[ "$SHARED_STATUS_DIR" == "${DESTINATION_ROOT}/.cardy-status" ]] ||
+  fail "shared status directory default"
+[[ "$SHARED_MANIFEST_DIR" == "${DESTINATION_ROOT}/.cardy-imports" ]] ||
+  fail "shared manifest directory default"
+[[ "$SHARED_LOCK_DIR" == "${DESTINATION_ROOT}/.cardy-locks" ]] ||
+  fail "shared lock directory default"
+preflight_destination_root || fail "destination preflight"
+write_shared_status "importing" "Village smoke test" 2 "${TEST_ROOT}/destination" "EXAMPLE_CARD" ||
+  fail "shared status writing"
+[[ -f "${TEST_ROOT}/destination/.cardy-status/Ingest-01.json" ]] ||
+  fail "shared status file missing"
+/usr/bin/plutil -convert xml1 -o /dev/null "${TEST_ROOT}/destination/.cardy-status/Ingest-01.json" ||
+  fail "shared status JSON syntax"
+acquire_shared_lock "example-card-fingerprint" || fail "shared lock acquisition"
+shared_lock="$REPLY"
+[[ -d "$shared_lock" ]] || fail "shared lock directory missing"
+release_shared_lock "$shared_lock"
+[[ ! -d "$shared_lock" ]] || fail "shared lock release"
 
 CAPTURE_DATE="2026-01-02"
 CAPTURE_TIME="09-08-07"
@@ -140,5 +171,24 @@ sidecar=("${TEST_ROOT}/destination"/photo-import-*.json(N))
 [[ "${#sidecar[@]}" == "1" ]] || fail "expected one JSON sidecar"
 /usr/bin/plutil -convert xml1 -o /dev/null "${sidecar[1]}" ||
   fail "sidecar JSON syntax"
+
+DATE_KEYS=(2026-01-02)
+write_shared_import_manifest \
+  "complete" \
+  "EXAMPLE_CARD" \
+  "${TEST_ROOT}/destination" \
+  "2026-01-03T12:34:56-05:00" \
+  1 \
+  2 \
+  2 \
+  2 \
+  20 \
+  20 \
+  "passed" || fail "shared manifest creation"
+
+shared_manifest=("${TEST_ROOT}/destination/.cardy-imports"/*.json(N))
+[[ "${#shared_manifest[@]}" == "1" ]] || fail "expected one shared manifest"
+/usr/bin/plutil -convert xml1 -o /dev/null "${shared_manifest[1]}" ||
+  fail "shared manifest JSON syntax"
 
 print "Smoke test passed."

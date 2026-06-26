@@ -25,6 +25,7 @@ and optionally ejects the card.
 - Optional automatic eject
 - Dry-run mode
 - JSON import sidecars
+- Ingest Village mode for multiple ingest stations writing to one shared volume
 - Local-only operation with no telemetry
 
 ## Requirements
@@ -108,6 +109,48 @@ DESTINATION_ROOT/YYYY/YYYY-MM-DD/
 
 Separate-shoot mode adds a timestamped shoot directory beneath the date.
 
+## Ingest Village mode
+
+Ingest Village mode is intended for productions where several Macs ingest cards
+to the same NAS, SAN, or other already-mounted network destination while editors
+work from that shared storage.
+
+When enabled, Cardy uses safer production defaults:
+
+- separate shoot folders are used to avoid filename and folder collisions;
+- checksum verification is enabled;
+- automatic eject is disabled;
+- shared destination locks are enabled;
+- shared station status JSON is written;
+- shared import manifest JSON is written.
+
+By default, shared coordination files are written beneath the destination root:
+
+```text
+DESTINATION_ROOT/
+  .cardy-status/
+    Ingest-01.json
+  .cardy-imports/
+    2026-06-25T14-33-18-04-00_Ingest-01_EOS_DIGITAL.json
+  .cardy-locks/
+    card-fingerprint.lock/
+```
+
+The settings window includes:
+
+- station name;
+- optional operator name;
+- minimum card size;
+- minimum destination free space;
+- shared status/manifests/locks toggles.
+
+Cardy uses atomic directory creation for shared locks. This is conservative and
+works better on network filesystems than lock files that must be updated in
+place. Locks older than 24 hours are treated as stale.
+
+Before copying, Cardy preflights the destination by verifying that the root
+exists, is writable, and meets the configured free-space threshold.
+
 ## Configuration and state
 
 Settings are stored as a data-only property list:
@@ -163,6 +206,21 @@ done
 
 /bin/zsh tests/smoke_test.zsh
 ```
+
+## Roadmap
+
+The ingest-village work is being built in staged sprints:
+
+1. Multi-station foundation: station identity, shared status, shared manifests,
+   shared locks, destination preflight.
+2. Production folder presets: Capture One session, Adobe/Bridge/Lightroom,
+   Premiere/Resolve, and hybrid photo/video layouts.
+3. Media expansion: video/audio extensions, full-card video preservation, and
+   per-media manifests.
+4. Post-import handoff: reveal/open destination, launch Capture One or Adobe
+   apps, and optional watched-folder integration.
+5. Shared dashboard: read `.cardy-status` and `.cardy-imports` files to show a
+   live ingest board for assistants and remote editors.
 
 ## Privacy
 

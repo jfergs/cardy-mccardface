@@ -21,6 +21,16 @@ MIN_CARD_SIZE_GB=0
 ORGANIZATION_MODE="daily"
 DATE_FOLDER_STYLE="year-date"
 SHOOT_FOLDER_STYLE="time-volume"
+INGEST_VILLAGE_MODE=false
+STATION_NAME="$(/bin/hostname -s 2>/dev/null || print CardyStation)"
+OPERATOR_NAME=""
+SHARED_STATUS_ENABLED=false
+SHARED_MANIFEST_ENABLED=false
+SHARED_LOCKS_ENABLED=false
+SHARED_STATUS_DIR=""
+SHARED_MANIFEST_DIR=""
+SHARED_LOCK_DIR=""
+MIN_FREE_SPACE_GB=0
 MAX_LOG_BYTES=10485760
 LOG_BACKUPS=5
 CONFIG_FILE="${CARDY_CONFIG_FILE:-${HOME}/Library/Application Support/CardyMcCardface/config.plist}"
@@ -46,6 +56,7 @@ typeset -A DATE_TIMES
 typeset -A DATE_CAMERAS
 typeset EXIFTOOL_PATH=""
 typeset MDLS_ENABLED=true
+typeset -a ACTIVE_SHARED_LOCKS
 
 ###############################################################################
 # General helpers
@@ -113,6 +124,11 @@ sanitize_component() {
   print -r -- "$value"
 }
 
+shared_path_default() {
+  local leaf="$1"
+  REPLY="${DESTINATION_ROOT}/${leaf}"
+}
+
 write_status() {
   local state="$1"
   local message="$2"
@@ -131,6 +147,44 @@ write_status() {
   /usr/bin/plutil -insert updatedAt -string "$(iso_timestamp)" "$temporary"
   command chmod 600 "$temporary"
   command mv -f "$temporary" "$STATUS_FILE"
+}
+
+write_shared_status() {
+  local state="$1"
+  local message="$2"
+  local file_count="${3:-0}"
+  local destination="${4:-}"
+  local source_volume="${5:-}"
+  local directory temporary status_file safe_station
+
+  bool_is_true "$INGEST_VILLAGE_MODE" || return 0
+  bool_is_true "$SHARED_STATUS_ENABLED" || return 0
+
+  directory="$SHARED_STATUS_DIR"
+  [[ -n "$directory" ]] || {
+    shared_path_default ".cardy-status"
+    directory="$REPLY"
+  }
+
+  safe_station="$(sanitize_component "$STATION_NAME")"
+  status_file="${directory}/${safe_station}.json"
+  temporary="${status_file}.tmp.$$"
+
+  command mkdir -p "$directory" || return 1
+  {
+    print -r -- "{"
+    print -r -- "  \"updated_at\": \"$(json_escape "$(iso_timestamp)")\","
+    print -r -- "  \"state\": \"$(json_escape "$state")\","
+    print -r -- "  \"message\": \"$(json_escape "$message")\","
+    print -r -- "  \"station_name\": \"$(json_escape "$STATION_NAME")\","
+    print -r -- "  \"hostname\": \"$(json_escape "$(/bin/hostname 2>/dev/null || print unknown)")\","
+    print -r -- "  \"operator\": \"$(json_escape "$OPERATOR_NAME")\","
+    print -r -- "  \"source_volume\": \"$(json_escape "$source_volume")\","
+    print -r -- "  \"destination\": \"$(json_escape "$destination")\","
+    print -r -- "  \"file_count\": ${file_count}"
+    print -r -- "}"
+  } > "$temporary"
+  command mv -f "$temporary" "$status_file"
 }
 
 rotate_logs() {
@@ -158,6 +212,10 @@ cleanup() {
   local lock_dir
   for lock_dir in "${ACTIVE_LOCKS[@]}"; do
     command rm -f "${lock_dir}/pid" 2>/dev/null
+    command rmdir "$lock_dir" 2>/dev/null
+  done
+  for lock_dir in "${ACTIVE_SHARED_LOCKS[@]}"; do
+    command rm -f "${lock_dir}/owner" 2>/dev/null
     command rmdir "$lock_dir" 2>/dev/null
   done
 }
@@ -200,7 +258,11 @@ trap handle_signal INT TERM HUP
 plist_value() {
   local plist="$1"
   local key="$2"
-  /usr/bin/plutil -extract "$key" raw -o - "$plist" 2>/dev/null
+  local output
+
+  if output="$(/usr/bin/plutil -extract "$key" raw -o - "$plist" 2>/dev/null)"; then
+    print -r -- "$output"
+  fi
 }
 
 config_value() {
@@ -282,6 +344,61 @@ load_configuration() {
   else
     log ERROR "minCardSizeGB must be a non-negative integer"
     return 1
+  fi
+
+  value="$(config_value ingestVillageMode)"
+  case "$value" in
+    true|false) INGEST_VILLAGE_MODE="$value" ;;
+    "") INGEST_VILLAGE_MODE=false ;;
+    *) log ERROR "ingestVillageMode must be a boolean"; return 1 ;;
+  esac
+  value="$(config_value stationName)"
+  [[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] &&
+    STATION_NAME="$value"
+  value="$(config_value operatorName)"
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] &&
+    OPERATOR_NAME="$value"
+  value="$(config_value sharedStatusEnabled)"
+  case "$value" in
+    true|false) SHARED_STATUS_ENABLED="$value" ;;
+    "") SHARED_STATUS_ENABLED="$INGEST_VILLAGE_MODE" ;;
+    *) log ERROR "sharedStatusEnabled must be a boolean"; return 1 ;;
+  esac
+  value="$(config_value sharedManifestEnabled)"
+  case "$value" in
+    true|false) SHARED_MANIFEST_ENABLED="$value" ;;
+    "") SHARED_MANIFEST_ENABLED="$INGEST_VILLAGE_MODE" ;;
+    *) log ERROR "sharedManifestEnabled must be a boolean"; return 1 ;;
+  esac
+  value="$(config_value sharedLocksEnabled)"
+  case "$value" in
+    true|false) SHARED_LOCKS_ENABLED="$value" ;;
+    "") SHARED_LOCKS_ENABLED="$INGEST_VILLAGE_MODE" ;;
+    *) log ERROR "sharedLocksEnabled must be a boolean"; return 1 ;;
+  esac
+  value="$(config_value sharedStatusDir)"
+  [[ -n "$value" ]] && SHARED_STATUS_DIR="${value%/}"
+  value="$(config_value sharedManifestDir)"
+  [[ -n "$value" ]] && SHARED_MANIFEST_DIR="${value%/}"
+  value="$(config_value sharedLockDir)"
+  [[ -n "$value" ]] && SHARED_LOCK_DIR="${value%/}"
+  value="$(config_value minFreeSpaceGB)"
+  if [[ -z "$value" ]]; then
+    MIN_FREE_SPACE_GB=0
+  elif [[ "$value" =~ ^[0-9]+$ ]]; then
+    MIN_FREE_SPACE_GB="$value"
+  else
+    log ERROR "minFreeSpaceGB must be a non-negative integer"
+    return 1
+  fi
+
+  if bool_is_true "$INGEST_VILLAGE_MODE"; then
+    ORGANIZATION_MODE="shoots"
+    CHECKSUM_VERIFY=true
+    AUTO_EJECT=false
+    [[ -n "$SHARED_STATUS_DIR" ]] || SHARED_STATUS_DIR="${DESTINATION_ROOT}/.cardy-status"
+    [[ -n "$SHARED_MANIFEST_DIR" ]] || SHARED_MANIFEST_DIR="${DESTINATION_ROOT}/.cardy-imports"
+    [[ -n "$SHARED_LOCK_DIR" ]] || SHARED_LOCK_DIR="${DESTINATION_ROOT}/.cardy-locks"
   fi
 }
 
@@ -382,6 +499,110 @@ release_lock() {
   ACTIVE_LOCKS=("${retained_locks[@]}")
 }
 
+acquire_shared_lock() {
+  local identifier="$1"
+  local safe_identifier lock_dir owner_file stale_age now modified
+
+  bool_is_true "$INGEST_VILLAGE_MODE" || { REPLY=""; return 0; }
+  bool_is_true "$SHARED_LOCKS_ENABLED" || { REPLY=""; return 0; }
+
+  [[ -n "$SHARED_LOCK_DIR" ]] || SHARED_LOCK_DIR="${DESTINATION_ROOT}/.cardy-locks"
+  command mkdir -p "$SHARED_LOCK_DIR" || return 1
+
+  safe_identifier="$(sanitize_component "$identifier")"
+  lock_dir="${SHARED_LOCK_DIR}/${safe_identifier}.lock"
+  owner_file="${lock_dir}/owner"
+
+  if command mkdir "$lock_dir" 2>/dev/null; then
+    {
+      print -r -- "station=${STATION_NAME}"
+      print -r -- "operator=${OPERATOR_NAME}"
+      print -r -- "pid=$$"
+      print -r -- "created_at=$(iso_timestamp)"
+    } > "$owner_file"
+    ACTIVE_SHARED_LOCKS+=("$lock_dir")
+    REPLY="$lock_dir"
+    return 0
+  fi
+
+  # Network locks are intentionally conservative. Only remove very old locks
+  # that are likely abandoned by a crashed ingest station.
+  now="$(command date '+%s')"
+  modified="$(/usr/bin/stat -f '%m' "$lock_dir" 2>/dev/null || print "$now")"
+  stale_age=$(( now - modified ))
+  if (( stale_age > 86400 )); then
+    log WARN "Removing stale shared lock older than 24h: $lock_dir"
+    command rm -f "$owner_file" 2>/dev/null
+    command rmdir "$lock_dir" 2>/dev/null
+    if command mkdir "$lock_dir" 2>/dev/null; then
+      print -r -- "station=${STATION_NAME}" > "$owner_file"
+      ACTIVE_SHARED_LOCKS+=("$lock_dir")
+      REPLY="$lock_dir"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+release_shared_lock() {
+  local lock_dir="$1"
+  local -a retained_locks
+  local active
+
+  [[ -n "$lock_dir" ]] || return 0
+  command rm -f "${lock_dir}/owner" 2>/dev/null
+  command rmdir "$lock_dir" 2>/dev/null
+
+  for active in "${ACTIVE_SHARED_LOCKS[@]}"; do
+    [[ "$active" != "$lock_dir" ]] && retained_locks+=("$active")
+  done
+  ACTIVE_SHARED_LOCKS=("${retained_locks[@]}")
+}
+
+preflight_destination_root() {
+  local test_dir test_file free_blocks block_size free_bytes minimum_bytes
+
+  [[ "$DESTINATION_ROOT" == /* && "$DESTINATION_ROOT" != "/" &&
+    "$DESTINATION_ROOT" != "/Volumes" ]] || {
+    log ERROR "Destination root is not safe: $DESTINATION_ROOT"
+    return 1
+  }
+
+  [[ -d "$DESTINATION_ROOT" ]] || {
+    log ERROR "Destination root is unavailable: $DESTINATION_ROOT"
+    return 1
+  }
+
+  test_dir="${DESTINATION_ROOT}/.cardy-preflight"
+  test_file="${test_dir}/write-test.$$"
+  command mkdir -p "$test_dir" || {
+    log ERROR "Destination root is not writable: $DESTINATION_ROOT"
+    return 1
+  }
+  print -r -- "$(iso_timestamp) ${STATION_NAME}" > "$test_file" || {
+    log ERROR "Could not write destination preflight file: $test_file"
+    return 1
+  }
+  command rm -f "$test_file"
+  command rmdir "$test_dir" 2>/dev/null || true
+
+  if (( MIN_FREE_SPACE_GB > 0 )); then
+    free_blocks="$(/usr/bin/stat -f '%a' "$DESTINATION_ROOT" 2>/dev/null || print "")"
+    block_size="$(/usr/bin/stat -f '%S' "$DESTINATION_ROOT" 2>/dev/null || print "")"
+    [[ "$free_blocks" =~ ^[0-9]+$ && "$block_size" =~ ^[0-9]+$ ]] || {
+      log ERROR "Could not determine free space for destination: $DESTINATION_ROOT"
+      return 1
+    }
+    free_bytes=$(( free_blocks * block_size ))
+    minimum_bytes=$(( MIN_FREE_SPACE_GB * 1024 * 1024 * 1024 ))
+    if (( free_bytes < minimum_bytes )); then
+      log ERROR "Destination free space below threshold: free_bytes=$free_bytes required_bytes=$minimum_bytes"
+      return 1
+    fi
+  fi
+}
+
 ###############################################################################
 # Image discovery and metadata
 ###############################################################################
@@ -437,6 +658,7 @@ classify_images_by_date() {
   local file relative file_size manifest
   local total_count=0
   local total_bytes=0
+  local first=""
 
   DATE_KEYS=()
   DATE_MANIFESTS=()
@@ -454,6 +676,7 @@ classify_images_by_date() {
 
     determine_capture_metadata "$file"
     relative="${file#"${source_root}/"}"
+    [[ -n "$first" ]] || first="$relative"
     manifest="${DATE_MANIFESTS[$CAPTURE_DATE]:-}"
     if [[ -z "$manifest" ]]; then
       manifest="${RUNTIME_ROOT}/files-${CAPTURE_DATE}.$$.$RANDOM.txt"
@@ -477,6 +700,7 @@ classify_images_by_date() {
 
   SCAN_COUNT="$total_count"
   SCAN_BYTES="$total_bytes"
+  SCAN_FIRST="$first"
   (( total_count > 0 ))
 }
 
@@ -765,6 +989,62 @@ write_sidecar() {
   log INFO "Sidecar written: $sidecar"
 }
 
+write_shared_import_manifest() {
+  local state="$1"
+  local volume_name="$2"
+  local destination_root="$3"
+  local imported_at="$4"
+  local elapsed="$5"
+  local source_files="$6"
+  local copied_files="$7"
+  local verified_files="$8"
+  local source_bytes="$9"
+  local copied_bytes="${10}"
+  local verification="${11}"
+  local safe_station safe_volume directory manifest temp_manifest
+
+  bool_is_true "$INGEST_VILLAGE_MODE" || return 0
+  bool_is_true "$SHARED_MANIFEST_ENABLED" || return 0
+
+  directory="$SHARED_MANIFEST_DIR"
+  [[ -n "$directory" ]] || {
+    shared_path_default ".cardy-imports"
+    directory="$REPLY"
+  }
+
+  command mkdir -p "$directory" || return 1
+  safe_station="$(sanitize_component "$STATION_NAME")"
+  safe_volume="$(sanitize_component "$volume_name")"
+  manifest="${directory}/${imported_at//[:+]/-}_${safe_station}_${safe_volume}.json"
+  temp_manifest="${manifest}.tmp.$$"
+
+  {
+    print -r -- "{"
+    print -r -- "  \"imported_at\": \"$(json_escape "$imported_at")\","
+    print -r -- "  \"state\": \"$(json_escape "$state")\","
+    print -r -- "  \"station_name\": \"$(json_escape "$STATION_NAME")\","
+    print -r -- "  \"hostname\": \"$(json_escape "$(/bin/hostname 2>/dev/null || print unknown)")\","
+    print -r -- "  \"operator\": \"$(json_escape "$OPERATOR_NAME")\","
+    print -r -- "  \"source_volume\": \"$(json_escape "$volume_name")\","
+    print -r -- "  \"destination_root\": \"$(json_escape "$destination_root")\","
+    print -r -- "  \"organization_mode\": \"$(json_escape "$ORGANIZATION_MODE")\","
+    print -r -- "  \"date_folder_style\": \"$(json_escape "$DATE_FOLDER_STYLE")\","
+    print -r -- "  \"shoot_folder_style\": \"$(json_escape "$SHOOT_FOLDER_STYLE")\","
+    print -r -- "  \"capture_dates\": ${#DATE_KEYS[@]},"
+    print -r -- "  \"source_files\": ${source_files},"
+    print -r -- "  \"copied_files\": ${copied_files},"
+    print -r -- "  \"verified_files\": ${verified_files},"
+    print -r -- "  \"source_bytes\": ${source_bytes},"
+    print -r -- "  \"copied_bytes\": ${copied_bytes},"
+    print -r -- "  \"duration_seconds\": ${elapsed},"
+    print -r -- "  \"checksum_verify\": $(bool_is_true "$CHECKSUM_VERIFY" && print true || print false),"
+    print -r -- "  \"verification\": \"$(json_escape "$verification")\""
+    print -r -- "}"
+  } > "$temp_manifest"
+  command mv -f "$temp_manifest" "$manifest"
+  log INFO "Shared import manifest written: $manifest"
+}
+
 eject_volume() {
   local volume="$1"
   if /usr/sbin/diskutil eject "$volume" >> "$LOGFILE" 2>&1; then
@@ -783,11 +1063,13 @@ process_volume() {
   local volume="$1"
   local info_file="${RUNTIME_ROOT}/volume-info.$$.$RANDOM.plist"
   local device_identifier source_root volume_name destination capture_date manifest
-  local lock_dir rsync_output checksum_output verification_result
+  local volume_uuid volume_size
+  local lock_dir shared_lock_dir rsync_output checksum_output verification_result
   local started_at elapsed imported_at speed_mib
   local batch_count batch_bytes
   local total_count total_bytes total_copied=0 total_copied_bytes=0 total_verified=0
   local overall_status=0
+  local card_fingerprint final_verification
   local -a sorted_dates
 
   SCAN_COUNT=0
@@ -821,8 +1103,12 @@ process_volume() {
   fi
 
   device_identifier="$(plist_value "$info_file" DeviceIdentifier)"
+  volume_uuid="$(plist_value "$info_file" VolumeUUID)"
+  volume_size="$(plist_value "$info_file" TotalSize)"
   command rm -f "$info_file"
   [[ -n "$device_identifier" ]] || device_identifier="${volume:t}"
+  [[ -n "$volume_uuid" ]] || volume_uuid="no-volume-uuid"
+  [[ -n "$volume_size" ]] || volume_size="unknown-size"
 
   if find_dcim_root "$volume"; then
     source_root="$REPLY"
@@ -843,6 +1129,17 @@ process_volume() {
   lock_dir="$REPLY"
 
   volume_name="${volume:t}"
+  card_fingerprint="${volume_uuid}_${device_identifier}_${volume_name}_${volume_size}_${SCAN_COUNT}_${SCAN_BYTES}_${SCAN_FIRST}"
+  if ! acquire_shared_lock "$card_fingerprint"; then
+    log INFO "Shared import already active; ignoring duplicate card on another ingest station: $volume"
+    write_shared_status "active" "Duplicate shared import ignored for ${volume_name}" \
+      "$SCAN_COUNT" "$DESTINATION_ROOT" "$volume_name" || true
+    remove_date_manifests
+    release_lock "$lock_dir"
+    return 0
+  fi
+  shared_lock_dir="${REPLY:-}"
+
   total_count="$SCAN_COUNT"
   total_bytes="$SCAN_BYTES"
   started_at=$SECONDS
@@ -852,14 +1149,23 @@ process_volume() {
   log INFO "Import started: source=$volume files=$total_count bytes=$total_bytes capture_dates=${#sorted_dates[@]}"
   write_status "importing" "Sorting ${total_count} photos across ${#sorted_dates[@]} dates from ${volume_name}" \
     "$total_count" "$DESTINATION_ROOT" || true
+  write_shared_status "importing" "Sorting ${total_count} photos across ${#sorted_dates[@]} dates from ${volume_name}" \
+    "$total_count" "$DESTINATION_ROOT" "$volume_name" || true
   notify "Import started" "${total_count} photos across ${#sorted_dates[@]} dates from ${volume_name}"
 
-  if [[ ! -d "$DESTINATION_ROOT" ]]; then
-    log ERROR "Destination root is unavailable: $DESTINATION_ROOT"
+  if ! preflight_destination_root; then
     write_status "error" "Destination unavailable: ${DESTINATION_ROOT}" \
       "$total_count" "$DESTINATION_ROOT" || true
+    write_shared_status "error" "Destination unavailable: ${DESTINATION_ROOT}" \
+      "$total_count" "$DESTINATION_ROOT" "$volume_name" || true
     notify "Import failed" "NAS destination is unavailable. ${volume_name} was left mounted."
+    elapsed=$(( SECONDS - started_at ))
+    (( elapsed < 1 )) && elapsed=1
+    write_shared_import_manifest "failed" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
+      "$elapsed" "$total_count" "$total_copied" "$total_verified" "$total_bytes" \
+      "$total_copied_bytes" "failed (destination preflight)" || true
     remove_date_manifests
+    release_shared_lock "$shared_lock_dir"
     release_lock "$lock_dir"
     return 1
   fi
@@ -944,28 +1250,49 @@ process_volume() {
   SCAN_BYTES="$total_bytes"
 
   if bool_is_true "$DRY_RUN"; then
+    final_verification="not_run"
     log INFO "Dry run complete: source=$volume destination_root=$DESTINATION_ROOT capture_dates=${#sorted_dates[@]} would_copy=$total_copied elapsed_seconds=$elapsed estimated_mib_per_second=$speed_mib verification=not_run"
     write_status "active" "Dry run complete: ${total_copied} photos across ${#sorted_dates[@]} dates" \
       "$total_copied" "$DESTINATION_ROOT" || true
+    write_shared_status "active" "Dry run complete: ${total_copied} photos across ${#sorted_dates[@]} dates" \
+      "$total_copied" "$DESTINATION_ROOT" "$volume_name" || true
+    write_shared_import_manifest "dry_run" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
+      "$elapsed" "$total_count" "$total_copied" "$total_verified" "$total_bytes" \
+      "$total_copied_bytes" "$final_verification" || true
     notify "Photo import dry run" "Would sort ${total_copied} photos into ${#sorted_dates[@]} date folders"
+    release_shared_lock "$shared_lock_dir"
     release_lock "$lock_dir"
     return 0
   fi
 
   if (( overall_status == 0 && total_verified == total_count )); then
+    final_verification="passed"
     log INFO "Import complete: source=$volume destination_root=$DESTINATION_ROOT capture_dates=${#sorted_dates[@]} copied=$total_copied source_files=$total_count verified_files=$total_verified elapsed_seconds=$elapsed speed_mib_per_second=$speed_mib verification=passed"
     write_status "active" "Import complete: ${total_count} photos across ${#sorted_dates[@]} dates" \
       "$total_count" "$DESTINATION_ROOT" || true
+    write_shared_status "active" "Import complete: ${total_count} photos across ${#sorted_dates[@]} dates" \
+      "$total_count" "$DESTINATION_ROOT" "$volume_name" || true
+    write_shared_import_manifest "complete" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
+      "$elapsed" "$total_count" "$total_copied" "$total_verified" "$total_bytes" \
+      "$total_copied_bytes" "$final_verification" || true
     notify "Import complete" "${total_count} photos sorted into ${#sorted_dates[@]} date folders"
     bool_is_true "$AUTO_EJECT" && eject_volume "$volume"
+    release_shared_lock "$shared_lock_dir"
     release_lock "$lock_dir"
     return 0
   fi
 
+  final_verification="failed"
   log ERROR "Import failed: source=$volume destination_root=$DESTINATION_ROOT source_files=$total_count verified_files=$total_verified elapsed_seconds=$elapsed"
   write_status "error" "Import failed: ${total_verified} of ${total_count} verified" \
     "$total_count" "$DESTINATION_ROOT" || true
+  write_shared_status "error" "Import failed: ${total_verified} of ${total_count} verified" \
+    "$total_count" "$DESTINATION_ROOT" "$volume_name" || true
+  write_shared_import_manifest "failed" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
+    "$elapsed" "$total_count" "$total_copied" "$total_verified" "$total_bytes" \
+    "$total_copied_bytes" "$final_verification" || true
   notify "Import failed" "Verified ${total_verified} of ${total_count} photos. ${volume_name} was left mounted."
+  release_shared_lock "$shared_lock_dir"
   release_lock "$lock_dir"
   return 1
 }

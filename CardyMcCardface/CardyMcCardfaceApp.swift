@@ -61,6 +61,13 @@ private struct CardyConfiguration {
     var dryRun = true
     var notificationsEnabled = true
     var minCardSizeGB = 0
+    var ingestVillageMode = false
+    var stationName = Host.current().localizedName ?? "CardyStation"
+    var operatorName = ""
+    var sharedStatusEnabled = false
+    var sharedManifestEnabled = false
+    var sharedLocksEnabled = false
+    var minFreeSpaceGB = 0
 
     static func load() -> CardyConfiguration {
         guard
@@ -92,6 +99,23 @@ private struct CardyConfiguration {
                 ?? configuration.notificationsEnabled
         configuration.minCardSizeGB =
             dictionary["minCardSizeGB"] as? Int ?? configuration.minCardSizeGB
+        configuration.ingestVillageMode =
+            dictionary["ingestVillageMode"] as? Bool ?? configuration.ingestVillageMode
+        configuration.stationName =
+            dictionary["stationName"] as? String ?? configuration.stationName
+        configuration.operatorName =
+            dictionary["operatorName"] as? String ?? configuration.operatorName
+        configuration.sharedStatusEnabled =
+            dictionary["sharedStatusEnabled"] as? Bool
+                ?? configuration.sharedStatusEnabled
+        configuration.sharedManifestEnabled =
+            dictionary["sharedManifestEnabled"] as? Bool
+                ?? configuration.sharedManifestEnabled
+        configuration.sharedLocksEnabled =
+            dictionary["sharedLocksEnabled"] as? Bool
+                ?? configuration.sharedLocksEnabled
+        configuration.minFreeSpaceGB =
+            dictionary["minFreeSpaceGB"] as? Int ?? configuration.minFreeSpaceGB
         return configuration
     }
 
@@ -106,6 +130,13 @@ private struct CardyConfiguration {
             "dryRun": dryRun,
             "notificationsEnabled": notificationsEnabled,
             "minCardSizeGB": minCardSizeGB,
+            "ingestVillageMode": ingestVillageMode,
+            "stationName": stationName,
+            "operatorName": operatorName,
+            "sharedStatusEnabled": sharedStatusEnabled,
+            "sharedManifestEnabled": sharedManifestEnabled,
+            "sharedLocksEnabled": sharedLocksEnabled,
+            "minFreeSpaceGB": minFreeSpaceGB,
         ]
 
         try FileManager.default.createDirectory(
@@ -148,13 +179,20 @@ private final class SettingsWindowController: NSWindowController {
     private let checksumButton = NSButton(checkboxWithTitle: "Checksum verification", target: nil, action: nil)
     private let dryRunButton = NSButton(checkboxWithTitle: "Dry run — do not copy files", target: nil, action: nil)
     private let notificationsButton = NSButton(checkboxWithTitle: "Show macOS notifications", target: nil, action: nil)
+    private let ingestVillageButton = NSButton(checkboxWithTitle: "Ingest Village mode", target: nil, action: nil)
+    private let stationNameField = NSTextField()
+    private let operatorNameField = NSTextField()
+    private let sharedStatusButton = NSButton(checkboxWithTitle: "Write shared station status", target: nil, action: nil)
+    private let sharedManifestButton = NSButton(checkboxWithTitle: "Write shared import manifests", target: nil, action: nil)
+    private let sharedLocksButton = NSButton(checkboxWithTitle: "Use shared destination locks", target: nil, action: nil)
     private let minimumSizeField = NSTextField()
+    private let minimumFreeSpaceField = NSTextField()
     private let onSave: () -> Void
 
     init(onSave: @escaping () -> Void) {
         self.onSave = onSave
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 610, height: 470),
+            contentRect: NSRect(x: 0, y: 0, width: 660, height: 650),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -195,6 +233,10 @@ private final class SettingsWindowController: NSWindowController {
         shootPopup.addItems(withTitles: ShootFolderStyle.allCases.map(\.title))
         minimumSizeField.placeholderString = "0"
         minimumSizeField.alignment = .right
+        minimumFreeSpaceField.placeholderString = "0"
+        minimumFreeSpaceField.alignment = .right
+        stationNameField.placeholderString = "Ingest-01"
+        operatorNameField.placeholderString = "Optional"
 
         let form = NSGridView(views: [
             [NSTextField(labelWithString: "Destination"), destinationRow],
@@ -202,6 +244,9 @@ private final class SettingsWindowController: NSWindowController {
             [NSTextField(labelWithString: "Date folders"), datePopup],
             [NSTextField(labelWithString: "Shoot folders"), shootPopup],
             [NSTextField(labelWithString: "Minimum card size (GB)"), minimumSizeField],
+            [NSTextField(labelWithString: "Minimum free space (GB)"), minimumFreeSpaceField],
+            [NSTextField(labelWithString: "Station name"), stationNameField],
+            [NSTextField(labelWithString: "Operator"), operatorNameField],
         ])
         form.rowSpacing = 12
         form.columnSpacing = 14
@@ -213,6 +258,10 @@ private final class SettingsWindowController: NSWindowController {
             checksumButton,
             dryRunButton,
             notificationsButton,
+            ingestVillageButton,
+            sharedStatusButton,
+            sharedManifestButton,
+            sharedLocksButton,
         ])
         options.orientation = .vertical
         options.alignment = .leading
@@ -240,6 +289,7 @@ private final class SettingsWindowController: NSWindowController {
             form.widthAnchor.constraint(equalTo: stack.widthAnchor),
             buttons.widthAnchor.constraint(equalTo: stack.widthAnchor),
             minimumSizeField.widthAnchor.constraint(equalToConstant: 90),
+            minimumFreeSpaceField.widthAnchor.constraint(equalToConstant: 90),
         ])
     }
 
@@ -254,6 +304,13 @@ private final class SettingsWindowController: NSWindowController {
         dryRunButton.state = configuration.dryRun ? .on : .off
         notificationsButton.state = configuration.notificationsEnabled ? .on : .off
         minimumSizeField.integerValue = configuration.minCardSizeGB
+        ingestVillageButton.state = configuration.ingestVillageMode ? .on : .off
+        stationNameField.stringValue = configuration.stationName
+        operatorNameField.stringValue = configuration.operatorName
+        sharedStatusButton.state = configuration.sharedStatusEnabled ? .on : .off
+        sharedManifestButton.state = configuration.sharedManifestEnabled ? .on : .off
+        sharedLocksButton.state = configuration.sharedLocksEnabled ? .on : .off
+        minimumFreeSpaceField.integerValue = configuration.minFreeSpaceGB
     }
 
     @objc private func chooseDestination() {
@@ -271,12 +328,21 @@ private final class SettingsWindowController: NSWindowController {
 
     @objc private func save() {
         let minimumSize = minimumSizeField.integerValue
+        let minimumFreeSpace = minimumFreeSpaceField.integerValue
         guard minimumSize >= 0 else {
             showError("Minimum card size must be zero or a positive whole number.")
             return
         }
+        guard minimumFreeSpace >= 0 else {
+            showError("Minimum free space must be zero or a positive whole number.")
+            return
+        }
         guard !destinationField.stringValue.isEmpty else {
             showError("Choose a destination folder.")
+            return
+        }
+        guard !stationNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            showError("Station name cannot be empty.")
             return
         }
 
@@ -293,6 +359,24 @@ private final class SettingsWindowController: NSWindowController {
         configuration.dryRun = dryRunButton.state == .on
         configuration.notificationsEnabled = notificationsButton.state == .on
         configuration.minCardSizeGB = minimumSize
+        configuration.ingestVillageMode = ingestVillageButton.state == .on
+        configuration.stationName =
+            stationNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        configuration.operatorName =
+            operatorNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        configuration.sharedStatusEnabled = sharedStatusButton.state == .on
+        configuration.sharedManifestEnabled = sharedManifestButton.state == .on
+        configuration.sharedLocksEnabled = sharedLocksButton.state == .on
+        configuration.minFreeSpaceGB = minimumFreeSpace
+
+        if configuration.ingestVillageMode {
+            configuration.organizationMode = .shoots
+            configuration.autoEject = false
+            configuration.checksumVerify = true
+            configuration.sharedStatusEnabled = true
+            configuration.sharedManifestEnabled = true
+            configuration.sharedLocksEnabled = true
+        }
 
         do {
             try configuration.save()
