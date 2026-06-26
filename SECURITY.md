@@ -20,6 +20,7 @@ network shares. It writes:
 - optional shared ingest status under the configured destination;
 - optional shared ingest manifests under the configured destination;
 - ready handoff files under the configured destination;
+- generated local dashboard HTML under `~/Library/Application Support/CardyMcCardface`;
 - optional shared ingest lock directories under the configured destination;
 - app preferences under `~/Library/Application Support/CardyMcCardface`;
 - menu bar state under `~/Library/Application Support/CardyMcCardface`;
@@ -27,10 +28,10 @@ network shares. It writes:
 - short-lived runtime files under the current user's macOS temporary directory.
 
 Logs, sidecars, summary manifests, JSONL file manifests, ready handoff files,
-and local status can contain camera models, source volume names, destination
-paths, workflow presets, media-type counts, preserved-file counts, relative
-filenames, card structure, file counts, and timestamps. Review them before
-sharing.
+local status, and generated dashboard HTML can contain camera models, source
+volume names, destination paths, workflow presets, media-type counts,
+preserved-file counts, relative filenames, card structure, file counts, and
+timestamps. Review them before sharing.
 
 Notification previews can expose source volume names, destination paths, and
 file counts on the lock screen. Disable notifications in the settings window or

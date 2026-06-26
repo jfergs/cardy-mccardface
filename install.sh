@@ -45,7 +45,10 @@ print "Building Cardy McCardface with Xcode..."
 command mkdir -p "${HOME}/Applications"
 /bin/rm -rf "$APP_PATH"
 /usr/bin/ditto "$BUILT_APP" "$APP_PATH"
-command chmod 755 "$APP_EXECUTABLE" "$APP_PATH/Contents/Resources/photo_import.sh"
+command chmod 755 \
+  "$APP_EXECUTABLE" \
+  "$APP_PATH/Contents/Resources/photo_import.sh" \
+  "$APP_PATH/Contents/Resources/dashboard.sh"
 /usr/bin/codesign --force --deep --sign - "$APP_PATH"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
   -f "$APP_PATH"

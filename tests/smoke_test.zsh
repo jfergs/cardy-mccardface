@@ -261,4 +261,18 @@ shared_file_manifest=("${TEST_ROOT}/destination/.cardy-imports"/*.files.jsonl(N)
   fail "expected one shared file manifest"
 remove_date_manifests
 
+dashboard_path="$(CARDY_CONFIG_FILE="$CONFIG_FILE" CARDY_STATUS_FILE="$STATUS_FILE" CARDY_SUPPORT_DIR="${TEST_ROOT}/support" \
+  /bin/zsh "${PROJECT_DIR}/CardyMcCardface/Resources/dashboard.sh" "${TEST_ROOT}/destination")" ||
+  fail "dashboard generation"
+[[ -f "$dashboard_path" ]] || fail "dashboard file missing"
+dashboard_has_title=false
+while IFS= read -r dashboard_line; do
+  if [[ "$dashboard_line" == *"Cardy McCardface Dashboard"* ]]; then
+    dashboard_has_title=true
+    break
+  fi
+done < "$dashboard_path"
+[[ "$dashboard_has_title" == "true" ]] ||
+  fail "dashboard title missing"
+
 print "Smoke test passed."

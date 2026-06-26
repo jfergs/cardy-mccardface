@@ -17,6 +17,7 @@ and optionally ejects the card.
 - Photo-only, video/audio-only, or hybrid media modes
 - Optional full visible card preservation for video and hybrid workflows
 - Ready handoff files after successful verification
+- Static local ingest dashboard generated from shared status/manifests
 - One folder per day or multiple shoots per day
 - Configurable date layouts:
   - `YYYY/YYYY-MM-DD`
@@ -78,6 +79,7 @@ The menu displays:
 - Reveal Last Import;
 - Open Last Import Report;
 - Open Shared Status Folder;
+- Open Dashboard;
 - Launch at Login;
 - Quit.
 
@@ -248,6 +250,15 @@ This is the handoff signal that editors, dashboards, or automation can treat the
 import as safe to use. The local status file also records the last import
 destination and last ready report so the menu-bar app can reveal them quickly.
 
+The dashboard is a static HTML file generated locally at:
+
+```text
+~/Library/Application Support/CardyMcCardface/dashboard.html
+```
+
+It reads `.cardy-status`, `.cardy-imports`, and `.cardy-ready` from the
+configured destination. It does not start a web server.
+
 ## Configuration and state
 
 Settings are stored as a data-only property list:
@@ -315,8 +326,8 @@ The production workflow work is being built in staged sprints:
 3. Full-card video preservation and richer per-file manifests.
 4. Post-import handoff: reveal/open destination, launch Capture One or Adobe
    apps, and optional watched-folder integration.
-5. Shared dashboard: read `.cardy-status` and `.cardy-imports` files to show a
-   live ingest board for assistants and remote editors.
+5. Shared dashboard: read `.cardy-status`, `.cardy-imports`, and `.cardy-ready`
+   files to show an ingest board for assistants and remote editors.
 
 ## Privacy
 

@@ -795,6 +795,44 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: folder)
     }
 
+    @objc func openDashboard() {
+        guard
+            let script = Bundle.main.url(
+                forResource: "dashboard",
+                withExtension: "sh"
+            )
+        else {
+            showAlert("The bundled dashboard generator is missing.")
+            return
+        }
+
+        let configuration = CardyConfiguration.load()
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [script.path, configuration.destinationRoot]
+        process.standardOutput = output
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                showAlert("Could not generate the dashboard.")
+                return
+            }
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            let path = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let path, !path.isEmpty else {
+                showAlert("Dashboard generator did not return a file path.")
+                return
+            }
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        } catch {
+            showAlert("Could not open dashboard: \(error.localizedDescription)")
+        }
+    }
+
     @objc func quit() {
         NSApplication.shared.terminate(nil)
     }
@@ -837,6 +875,9 @@ private struct CardyMcCardfaceApp: App {
             }
             Button("Open Shared Status Folder") {
                 appDelegate.openSharedStatusFolder()
+            }
+            Button("Open Dashboard") {
+                appDelegate.openDashboard()
             }
             Divider()
             Button(

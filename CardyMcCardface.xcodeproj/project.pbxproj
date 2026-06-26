@@ -10,6 +10,7 @@
 		A10000000000000000000001 /* CardyMcCardfaceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* CardyMcCardfaceApp.swift */; };
 		A10000000000000000000002 /* photo_import.sh in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* photo_import.sh */; };
 		A10000000000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* Assets.xcassets */; };
+		A10000000000000000000004 /* dashboard.sh in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* dashboard.sh */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -18,6 +19,7 @@
 		A20000000000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A20000000000000000000004 /* Cardy McCardface.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Cardy McCardface.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A20000000000000000000006 /* dashboard.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = dashboard.sh; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -54,6 +56,7 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000002 /* photo_import.sh */,
+				A20000000000000000000006 /* dashboard.sh */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -127,6 +130,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000002 /* photo_import.sh in Resources */,
+				A10000000000000000000004 /* dashboard.sh in Resources */,
 				A10000000000000000000003 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
