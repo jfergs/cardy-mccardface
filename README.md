@@ -298,6 +298,33 @@ tail -f ~/Library/Logs/CardyMcCardface.log
 If verification fails, the card remains mounted. Interrupted transfers retain
 partial files and can resume later.
 
+## Troubleshooting
+
+### Crash report when running the binary directly
+
+Cardy is a GUI menu-bar app and should be launched through LaunchServices:
+
+```zsh
+open "$HOME/Applications/Cardy McCardface.app"
+```
+
+Do not run the executable inside the bundle directly:
+
+```text
+~/Applications/Cardy McCardface.app/Contents/MacOS/CardyMcCardface
+```
+
+On recent macOS versions, direct execution from a terminal, sandbox, or
+automation host can abort during AppKit application registration with a crash
+inside `HIServices` / `_RegisterApplication`. That is a launch-context failure,
+not an importer failure. Register and open the app bundle instead:
+
+```zsh
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+  -f "$HOME/Applications/Cardy McCardface.app"
+open "$HOME/Applications/Cardy McCardface.app"
+```
+
 ## Uninstall
 
 ```zsh

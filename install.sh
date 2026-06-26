@@ -52,6 +52,10 @@ command chmod 755 \
 /usr/bin/codesign --force --deep --sign - "$APP_PATH"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
   -f "$APP_PATH"
-/usr/bin/open -na "$APP_PATH"
+
+if ! /usr/bin/open -na "$APP_PATH"; then
+  print -ru2 -- "Installed, but macOS did not launch the app automatically."
+  print -ru2 -- "Open it from Finder or run: open \"${APP_PATH}\""
+fi
 
 print "Installed: ${APP_PATH}"
