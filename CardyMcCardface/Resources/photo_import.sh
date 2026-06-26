@@ -35,6 +35,7 @@ SHARED_LOCKS_ENABLED=false
 SHARED_STATUS_DIR=""
 SHARED_MANIFEST_DIR=""
 SHARED_LOCK_DIR=""
+PRESERVE_FULL_CARD_FOR_VIDEO=false
 MIN_FREE_SPACE_GB=0
 MAX_LOG_BYTES=10485760
 LOG_BACKUPS=5
@@ -68,6 +69,11 @@ typeset -a ACTIVE_SHARED_LOCKS
 typeset MEDIA_PHOTO_COUNT=0
 typeset MEDIA_VIDEO_COUNT=0
 typeset MEDIA_AUDIO_COUNT=0
+typeset MEDIA_OTHER_COUNT=0
+typeset FIRST_CAPTURE_AT=""
+typeset LAST_CAPTURE_AT=""
+typeset CARD_FINGERPRINT=""
+typeset FILE_MANIFEST=""
 
 ###############################################################################
 # General helpers
@@ -408,6 +414,12 @@ load_configuration() {
   [[ -n "$value" ]] && SHARED_MANIFEST_DIR="${value%/}"
   value="$(config_value sharedLockDir)"
   [[ -n "$value" ]] && SHARED_LOCK_DIR="${value%/}"
+  value="$(config_value preserveFullCardForVideo)"
+  case "$value" in
+    true|false) PRESERVE_FULL_CARD_FOR_VIDEO="$value" ;;
+    "") PRESERVE_FULL_CARD_FOR_VIDEO=false ;;
+    *) log ERROR "preserveFullCardForVideo must be a boolean"; return 1 ;;
+  esac
   value="$(config_value minFreeSpaceGB)"
   if [[ -z "$value" ]]; then
     MIN_FREE_SPACE_GB=0
@@ -423,6 +435,7 @@ load_configuration() {
     MEDIA_MODE="photos-and-videos"
     ORGANIZATION_MODE="shoots"
     CHECKSUM_VERIFY=true
+    PRESERVE_FULL_CARD_FOR_VIDEO=true
     AUTO_EJECT=false
     [[ -n "$SHARED_STATUS_DIR" ]] || SHARED_STATUS_DIR="${DESTINATION_ROOT}/.cardy-status"
     [[ -n "$SHARED_MANIFEST_DIR" ]] || SHARED_MANIFEST_DIR="${DESTINATION_ROOT}/.cardy-imports"
@@ -640,6 +653,11 @@ is_supported_image() {
   media_kind_for_path "$path" >/dev/null
 }
 
+preserve_full_card_active() {
+  bool_is_true "$PRESERVE_FULL_CARD_FOR_VIDEO" || return 1
+  [[ "$MEDIA_MODE" == "videos-only" || "$MEDIA_MODE" == "photos-and-videos" ]]
+}
+
 media_kind_for_path() {
   local path="$1"
   local name="${path:t}"
@@ -664,6 +682,15 @@ media_kind_for_path() {
     return 0
   fi
   return 1
+}
+
+media_kind_for_manifest() {
+  local path="$1"
+  if media_kind_for_path "$path"; then
+    return 0
+  fi
+  preserve_full_card_active || return 1
+  REPLY="other"
 }
 
 metadata_supported_for_path() {
@@ -709,7 +736,7 @@ scan_images() {
 
 classify_images_by_date() {
   local source_root="$1"
-  local file relative file_size manifest media_kind
+  local file relative file_size manifest media_kind capture_at
   local total_count=0
   local total_bytes=0
   local first=""
@@ -726,20 +753,27 @@ classify_images_by_date() {
   MEDIA_PHOTO_COUNT=0
   MEDIA_VIDEO_COUNT=0
   MEDIA_AUDIO_COUNT=0
+  MEDIA_OTHER_COUNT=0
+  FIRST_CAPTURE_AT=""
+  LAST_CAPTURE_AT=""
+  FILE_MANIFEST="${RUNTIME_ROOT}/file-manifest.$$.$RANDOM.jsonl"
+  : > "$FILE_MANIFEST"
 
   while IFS= read -r -d $'\0' file; do
-    media_kind_for_path "$file" || continue
+    media_kind_for_manifest "$file" || continue
     media_kind="$REPLY"
     if [[ "$file" == *$'\n'* || "$file" == *$'\r'* ]]; then
       log WARN "Skipping filename containing a line break: $file"
       continue
     fi
 
-    if metadata_supported_for_path "$file"; then
+    if [[ "$media_kind" == "photo" ]] && metadata_supported_for_path "$file"; then
       determine_capture_metadata "$file"
     else
       determine_capture_metadata_from_file "$file"
     fi
+    capture_at="$(capture_iso_from_date_time "$CAPTURE_DATE" "$CAPTURE_TIME")"
+    update_capture_bounds "$capture_at"
     relative="${file#"${source_root}/"}"
     [[ -n "$first" ]] || first="$relative"
     manifest="${DATE_MANIFESTS[$CAPTURE_DATE]:-}"
@@ -775,7 +809,12 @@ classify_images_by_date() {
         DATE_AUDIO_COUNTS[$CAPTURE_DATE]=$(( DATE_AUDIO_COUNTS[$CAPTURE_DATE] + 1 ))
         (( MEDIA_AUDIO_COUNT++ ))
         ;;
+      other)
+        (( MEDIA_OTHER_COUNT++ ))
+        ;;
     esac
+    write_file_manifest_line \
+      "$relative" "$media_kind" "$file_size" "$CAPTURE_DATE" "$CAPTURE_TIME" "$capture_at"
     (( total_count++ ))
     (( total_bytes += file_size ))
   done < <(/usr/bin/find "$source_root" -type d -name '.*' -prune -o -type f -print0 2>/dev/null)
@@ -783,6 +822,10 @@ classify_images_by_date() {
   SCAN_COUNT="$total_count"
   SCAN_BYTES="$total_bytes"
   SCAN_FIRST="$first"
+  if (( total_count == 0 )); then
+    command rm -f "$FILE_MANIFEST"
+    FILE_MANIFEST=""
+  fi
   (( total_count > 0 ))
 }
 
@@ -792,6 +835,8 @@ remove_date_manifests() {
     manifest="${DATE_MANIFESTS[$capture_date]:-}"
     [[ -n "$manifest" ]] && command rm -f "$manifest"
   done
+  [[ -n "$FILE_MANIFEST" ]] && command rm -f "$FILE_MANIFEST"
+  FILE_MANIFEST=""
 }
 
 normalize_capture_date() {
@@ -821,7 +866,10 @@ normalize_capture_time() {
 metadata_value_exiftool() {
   local tag="$1"
   local file="$2"
-  "$EXIFTOOL_PATH" -s3 "-${tag}" "$file" 2>/dev/null | /usr/bin/head -n 1
+  local line=""
+
+  IFS= read -r line < <("$EXIFTOOL_PATH" -s3 "-${tag}" "$file" 2>/dev/null)
+  print -r -- "$line"
 }
 
 determine_capture_metadata() {
@@ -881,6 +929,47 @@ determine_capture_metadata_from_file() {
     CAPTURE_DATE="$(command date '+%Y-%m-%d')"
   [[ "$CAPTURE_TIME" == [0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]] ||
     CAPTURE_TIME="$(command date '+%H-%M-%S')"
+}
+
+capture_iso_from_date_time() {
+  local capture_date="$1"
+  local capture_time="$2"
+  local offset
+
+  offset="$(command date '+%z')"
+  print -r -- "${capture_date}T${capture_time//-/:}${offset[1,-3]}:${offset[-2,-1]}"
+}
+
+update_capture_bounds() {
+  local capture_at="$1"
+
+  [[ -n "$capture_at" ]] || return 0
+  if [[ -z "$FIRST_CAPTURE_AT" || "$capture_at" < "$FIRST_CAPTURE_AT" ]]; then
+    FIRST_CAPTURE_AT="$capture_at"
+  fi
+  if [[ -z "$LAST_CAPTURE_AT" || "$capture_at" > "$LAST_CAPTURE_AT" ]]; then
+    LAST_CAPTURE_AT="$capture_at"
+  fi
+}
+
+write_file_manifest_line() {
+  local relative="$1"
+  local media_kind="$2"
+  local bytes="$3"
+  local capture_date="$4"
+  local capture_time="$5"
+  local capture_at="$6"
+
+  [[ -n "$FILE_MANIFEST" ]] || return 0
+  {
+    print -rn -- "{\"relative_path\":\"$(json_escape "$relative")\","
+    print -rn -- "\"media_kind\":\"$(json_escape "$media_kind")\","
+    print -rn -- "\"bytes\":${bytes},"
+    print -rn -- "\"capture_date\":\"$(json_escape "$capture_date")\","
+    print -rn -- "\"capture_time\":\"$(json_escape "$capture_time")\","
+    print -rn -- "\"capture_at\":\"$(json_escape "$capture_at")\""
+    print -r -- "}"
+  } >> "$FILE_MANIFEST"
 }
 
 build_destination() {
@@ -1123,6 +1212,10 @@ write_sidecar() {
     print -r -- "  \"photo_files\": ${MEDIA_PHOTO_COUNT},"
     print -r -- "  \"video_files\": ${MEDIA_VIDEO_COUNT},"
     print -r -- "  \"audio_files\": ${MEDIA_AUDIO_COUNT},"
+    print -r -- "  \"other_preserved_files\": ${MEDIA_OTHER_COUNT},"
+    print -r -- "  \"first_capture_at\": \"$(json_escape "$FIRST_CAPTURE_AT")\","
+    print -r -- "  \"last_capture_at\": \"$(json_escape "$LAST_CAPTURE_AT")\","
+    print -r -- "  \"card_fingerprint\": \"$(json_escape "$CARD_FINGERPRINT")\","
     print -r -- "  \"files\": ${SCAN_COUNT},"
     print -r -- "  \"bytes\": ${SCAN_BYTES},"
     print -r -- "  \"import_duration_seconds\": ${elapsed},"
@@ -1181,6 +1274,10 @@ write_shared_import_manifest() {
     print -r -- "  \"photo_files\": ${MEDIA_PHOTO_COUNT},"
     print -r -- "  \"video_files\": ${MEDIA_VIDEO_COUNT},"
     print -r -- "  \"audio_files\": ${MEDIA_AUDIO_COUNT},"
+    print -r -- "  \"other_preserved_files\": ${MEDIA_OTHER_COUNT},"
+    print -r -- "  \"first_capture_at\": \"$(json_escape "$FIRST_CAPTURE_AT")\","
+    print -r -- "  \"last_capture_at\": \"$(json_escape "$LAST_CAPTURE_AT")\","
+    print -r -- "  \"card_fingerprint\": \"$(json_escape "$CARD_FINGERPRINT")\","
     print -r -- "  \"source_files\": ${source_files},"
     print -r -- "  \"copied_files\": ${copied_files},"
     print -r -- "  \"verified_files\": ${verified_files},"
@@ -1193,6 +1290,31 @@ write_shared_import_manifest() {
   } > "$temp_manifest"
   command mv -f "$temp_manifest" "$manifest"
   log INFO "Shared import manifest written: $manifest"
+}
+
+write_shared_file_manifest() {
+  local volume_name="$1"
+  local imported_at="$2"
+  local directory safe_station safe_volume output line
+
+  bool_is_true "$INGEST_VILLAGE_MODE" || return 0
+  bool_is_true "$SHARED_MANIFEST_ENABLED" || return 0
+  [[ -n "$FILE_MANIFEST" && -f "$FILE_MANIFEST" ]] || return 0
+
+  directory="$SHARED_MANIFEST_DIR"
+  [[ -n "$directory" ]] || {
+    shared_path_default ".cardy-imports"
+    directory="$REPLY"
+  }
+  command mkdir -p "$directory" || return 1
+  safe_station="$(sanitize_component "$STATION_NAME")"
+  safe_volume="$(sanitize_component "$volume_name")"
+  output="${directory}/${imported_at//[:+]/-}_${safe_station}_${safe_volume}.files.jsonl"
+  : > "$output" || return 1
+  while IFS= read -r line; do
+    print -r -- "$line" >> "$output"
+  done < "$FILE_MANIFEST"
+  log INFO "Shared file manifest written: $output"
 }
 
 eject_volume() {
@@ -1220,6 +1342,7 @@ process_volume() {
   local total_count total_bytes total_copied=0 total_copied_bytes=0 total_verified=0
   local overall_status=0
   local card_fingerprint final_verification
+  local preserve_original_file_manifest=""
   local -a sorted_dates
 
   SCAN_COUNT=0
@@ -1260,7 +1383,9 @@ process_volume() {
   [[ -n "$volume_uuid" ]] || volume_uuid="no-volume-uuid"
   [[ -n "$volume_size" ]] || volume_size="unknown-size"
 
-  if find_dcim_root "$volume"; then
+  if preserve_full_card_active; then
+    source_root="$volume"
+  elif find_dcim_root "$volume"; then
     source_root="$REPLY"
   else
     source_root="$volume"
@@ -1279,8 +1404,9 @@ process_volume() {
   lock_dir="$REPLY"
 
   volume_name="${volume:t}"
-  card_fingerprint="${volume_uuid}_${device_identifier}_${volume_name}_${volume_size}_${SCAN_COUNT}_${SCAN_BYTES}_${SCAN_FIRST}"
-  if ! acquire_shared_lock "$card_fingerprint"; then
+  CARD_FINGERPRINT="${volume_uuid}_${device_identifier}_${volume_name}_${volume_size}_${SCAN_COUNT}_${SCAN_BYTES}_${SCAN_FIRST}"
+  card_fingerprint="$CARD_FINGERPRINT"
+  if ! acquire_shared_lock "$CARD_FINGERPRINT"; then
     log INFO "Shared import already active; ignoring duplicate card on another ingest station: $volume"
     write_shared_status "active" "Duplicate shared import ignored for ${volume_name}" \
       "$SCAN_COUNT" "$DESTINATION_ROOT" "$volume_name" || true
@@ -1297,11 +1423,11 @@ process_volume() {
   sorted_dates=("${(on)DATE_KEYS[@]}")
 
   log INFO "Import started: source=$volume files=$total_count bytes=$total_bytes capture_dates=${#sorted_dates[@]}"
-  write_status "importing" "Sorting ${total_count} photos across ${#sorted_dates[@]} dates from ${volume_name}" \
+  write_status "importing" "Sorting ${total_count} files across ${#sorted_dates[@]} dates from ${volume_name}" \
     "$total_count" "$DESTINATION_ROOT" || true
-  write_shared_status "importing" "Sorting ${total_count} photos across ${#sorted_dates[@]} dates from ${volume_name}" \
+  write_shared_status "importing" "Sorting ${total_count} files across ${#sorted_dates[@]} dates from ${volume_name}" \
     "$total_count" "$DESTINATION_ROOT" "$volume_name" || true
-  notify "Import started" "${total_count} photos across ${#sorted_dates[@]} dates from ${volume_name}"
+  notify "Import started" "${total_count} files across ${#sorted_dates[@]} dates from ${volume_name}"
 
   if ! preflight_destination_root; then
     write_status "error" "Destination unavailable: ${DESTINATION_ROOT}" \
@@ -1314,7 +1440,11 @@ process_volume() {
     write_shared_import_manifest "failed" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
       "$elapsed" "$total_count" "$total_copied" "$total_verified" "$total_bytes" \
       "$total_copied_bytes" "failed (destination preflight)" || true
+    write_shared_file_manifest "$volume_name" "$imported_at" || true
+    preserve_original_file_manifest="$FILE_MANIFEST"
+    FILE_MANIFEST=""
     remove_date_manifests
+    command rm -f "$preserve_original_file_manifest"
     release_shared_lock "$shared_lock_dir"
     release_lock "$lock_dir"
     return 1
@@ -1400,21 +1530,25 @@ process_volume() {
   elapsed=$(( SECONDS - started_at ))
   (( elapsed < 1 )) && elapsed=1
   speed_mib=$(( total_copied_bytes / elapsed / 1024 / 1024 ))
-  remove_date_manifests
   SCAN_COUNT="$total_count"
   SCAN_BYTES="$total_bytes"
 
   if bool_is_true "$DRY_RUN"; then
     final_verification="not_run"
     log INFO "Dry run complete: source=$volume destination_root=$DESTINATION_ROOT capture_dates=${#sorted_dates[@]} would_copy=$total_copied elapsed_seconds=$elapsed estimated_mib_per_second=$speed_mib verification=not_run"
-    write_status "active" "Dry run complete: ${total_copied} photos across ${#sorted_dates[@]} dates" \
+    write_status "active" "Dry run complete: ${total_copied} files across ${#sorted_dates[@]} dates" \
       "$total_copied" "$DESTINATION_ROOT" || true
-    write_shared_status "active" "Dry run complete: ${total_copied} photos across ${#sorted_dates[@]} dates" \
+    write_shared_status "active" "Dry run complete: ${total_copied} files across ${#sorted_dates[@]} dates" \
       "$total_copied" "$DESTINATION_ROOT" "$volume_name" || true
     write_shared_import_manifest "dry_run" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
       "$elapsed" "$total_count" "$total_copied" "$total_verified" "$total_bytes" \
       "$total_copied_bytes" "$final_verification" || true
-    notify "Photo import dry run" "Would sort ${total_copied} photos into ${#sorted_dates[@]} date folders"
+    write_shared_file_manifest "$volume_name" "$imported_at" || true
+    preserve_original_file_manifest="$FILE_MANIFEST"
+    FILE_MANIFEST=""
+    notify "Import dry run" "Would sort ${total_copied} files into ${#sorted_dates[@]} date folders"
+    remove_date_manifests
+    command rm -f "$preserve_original_file_manifest"
     release_shared_lock "$shared_lock_dir"
     release_lock "$lock_dir"
     return 0
@@ -1423,15 +1557,20 @@ process_volume() {
   if (( overall_status == 0 && total_verified == total_count )); then
     final_verification="passed"
     log INFO "Import complete: source=$volume destination_root=$DESTINATION_ROOT capture_dates=${#sorted_dates[@]} copied=$total_copied source_files=$total_count verified_files=$total_verified elapsed_seconds=$elapsed speed_mib_per_second=$speed_mib verification=passed"
-    write_status "active" "Import complete: ${total_count} photos across ${#sorted_dates[@]} dates" \
+    write_status "active" "Import complete: ${total_count} files across ${#sorted_dates[@]} dates" \
       "$total_count" "$DESTINATION_ROOT" || true
-    write_shared_status "active" "Import complete: ${total_count} photos across ${#sorted_dates[@]} dates" \
+    write_shared_status "active" "Import complete: ${total_count} files across ${#sorted_dates[@]} dates" \
       "$total_count" "$DESTINATION_ROOT" "$volume_name" || true
     write_shared_import_manifest "complete" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
       "$elapsed" "$total_count" "$total_copied" "$total_verified" "$total_bytes" \
       "$total_copied_bytes" "$final_verification" || true
-    notify "Import complete" "${total_count} photos sorted into ${#sorted_dates[@]} date folders"
+    write_shared_file_manifest "$volume_name" "$imported_at" || true
+    preserve_original_file_manifest="$FILE_MANIFEST"
+    FILE_MANIFEST=""
+    notify "Import complete" "${total_count} files sorted into ${#sorted_dates[@]} date folders"
     bool_is_true "$AUTO_EJECT" && eject_volume "$volume"
+    remove_date_manifests
+    command rm -f "$preserve_original_file_manifest"
     release_shared_lock "$shared_lock_dir"
     release_lock "$lock_dir"
     return 0
@@ -1446,7 +1585,12 @@ process_volume() {
   write_shared_import_manifest "failed" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
     "$elapsed" "$total_count" "$total_copied" "$total_verified" "$total_bytes" \
     "$total_copied_bytes" "$final_verification" || true
-  notify "Import failed" "Verified ${total_verified} of ${total_count} photos. ${volume_name} was left mounted."
+  write_shared_file_manifest "$volume_name" "$imported_at" || true
+  preserve_original_file_manifest="$FILE_MANIFEST"
+  FILE_MANIFEST=""
+  notify "Import failed" "Verified ${total_verified} of ${total_count} files. ${volume_name} was left mounted."
+  remove_date_manifests
+  command rm -f "$preserve_original_file_manifest"
   release_shared_lock "$shared_lock_dir"
   release_lock "$lock_dir"
   return 1

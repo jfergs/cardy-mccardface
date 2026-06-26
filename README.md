@@ -15,6 +15,7 @@ and optionally ejects the card.
 - Workflow presets for personal archives, Capture One, Adobe, video production,
   hybrid production, and ingest villages
 - Photo-only, video/audio-only, or hybrid media modes
+- Optional full visible card preservation for video and hybrid workflows
 - One folder per day or multiple shoots per day
 - Configurable date layouts:
   - `YYYY/YYYY-MM-DD`
@@ -101,6 +102,11 @@ MOV MP4 MXF MTS M2TS R3D BRAW CRM WAV AIFF AIF MP3
 
 Hidden files and hidden directories are ignored.
 
+When full-card preservation is enabled for video or hybrid workflows, Cardy
+copies every visible file under the card root, not only known media extensions.
+Known photo/video/audio files are counted by media type; other visible files are
+preserved and counted as `other_preserved_files`.
+
 ## Capture date and destination
 
 The first supported image determines the shoot date:
@@ -180,6 +186,10 @@ Hybrid and Ingest Village presets create:
 The original card directory structure is still preserved under the import
 destination. Scaffold folders are created as production handoff structure.
 
+Video, hybrid, and ingest-village presets enable full visible card preservation
+by default. This is safer for camera systems that depend on supporting folders
+and metadata files for relinking in Premiere, Resolve, or vendor tools.
+
 ## Ingest Village mode
 
 Ingest Village mode is intended for productions where several Macs ingest cards
@@ -203,6 +213,7 @@ DESTINATION_ROOT/
     Ingest-01.json
   .cardy-imports/
     2026-06-25T14-33-18-04-00_Ingest-01_EOS_DIGITAL.json
+    2026-06-25T14-33-18-04-00_Ingest-01_EOS_DIGITAL.files.jsonl
   .cardy-locks/
     card-fingerprint.lock/
 ```
@@ -221,6 +232,10 @@ place. Locks older than 24 hours are treated as stale.
 
 Before copying, Cardy preflights the destination by verifying that the root
 exists, is writable, and meets the configured free-space threshold.
+
+Shared summary manifests include workflow preset, media mode, media counts,
+preserved-file counts, first/last capture timestamps, and card fingerprint.
+The `.files.jsonl` manifest contains one JSON object per imported relative path.
 
 ## Configuration and state
 
@@ -286,7 +301,7 @@ The production workflow work is being built in staged sprints:
    shared locks, destination preflight.
 2. Production folder presets and media modes: Capture One, Adobe, video, and
    hybrid layouts with photo/video/audio file classification.
-3. Full-card video preservation and richer per-media manifests.
+3. Full-card video preservation and richer per-file manifests.
 4. Post-import handoff: reveal/open destination, launch Capture One or Adobe
    apps, and optional watched-folder integration.
 5. Shared dashboard: read `.cardy-status` and `.cardy-imports` files to show a

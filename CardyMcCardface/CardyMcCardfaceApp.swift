@@ -103,6 +103,7 @@ private struct CardyConfiguration {
     var sharedStatusEnabled = false
     var sharedManifestEnabled = false
     var sharedLocksEnabled = false
+    var preserveFullCardForVideo = false
     var minFreeSpaceGB = 0
 
     static func load() -> CardyConfiguration {
@@ -156,6 +157,9 @@ private struct CardyConfiguration {
         configuration.sharedLocksEnabled =
             dictionary["sharedLocksEnabled"] as? Bool
                 ?? configuration.sharedLocksEnabled
+        configuration.preserveFullCardForVideo =
+            dictionary["preserveFullCardForVideo"] as? Bool
+                ?? configuration.preserveFullCardForVideo
         configuration.minFreeSpaceGB =
             dictionary["minFreeSpaceGB"] as? Int ?? configuration.minFreeSpaceGB
         return configuration
@@ -180,6 +184,7 @@ private struct CardyConfiguration {
             "sharedStatusEnabled": sharedStatusEnabled,
             "sharedManifestEnabled": sharedManifestEnabled,
             "sharedLocksEnabled": sharedLocksEnabled,
+            "preserveFullCardForVideo": preserveFullCardForVideo,
             "minFreeSpaceGB": minFreeSpaceGB,
         ]
 
@@ -231,6 +236,7 @@ private final class SettingsWindowController: NSWindowController {
     private let sharedStatusButton = NSButton(checkboxWithTitle: "Write shared station status", target: nil, action: nil)
     private let sharedManifestButton = NSButton(checkboxWithTitle: "Write shared import manifests", target: nil, action: nil)
     private let sharedLocksButton = NSButton(checkboxWithTitle: "Use shared destination locks", target: nil, action: nil)
+    private let preserveFullCardButton = NSButton(checkboxWithTitle: "Preserve full visible card structure for video", target: nil, action: nil)
     private let minimumSizeField = NSTextField()
     private let minimumFreeSpaceField = NSTextField()
     private let onSave: () -> Void
@@ -312,6 +318,7 @@ private final class SettingsWindowController: NSWindowController {
             sharedStatusButton,
             sharedManifestButton,
             sharedLocksButton,
+            preserveFullCardButton,
         ])
         options.orientation = .vertical
         options.alignment = .leading
@@ -362,6 +369,7 @@ private final class SettingsWindowController: NSWindowController {
         sharedStatusButton.state = configuration.sharedStatusEnabled ? .on : .off
         sharedManifestButton.state = configuration.sharedManifestEnabled ? .on : .off
         sharedLocksButton.state = configuration.sharedLocksEnabled ? .on : .off
+        preserveFullCardButton.state = configuration.preserveFullCardForVideo ? .on : .off
         minimumFreeSpaceField.integerValue = configuration.minFreeSpaceGB
     }
 
@@ -423,6 +431,7 @@ private final class SettingsWindowController: NSWindowController {
         configuration.sharedStatusEnabled = sharedStatusButton.state == .on
         configuration.sharedManifestEnabled = sharedManifestButton.state == .on
         configuration.sharedLocksEnabled = sharedLocksButton.state == .on
+        configuration.preserveFullCardForVideo = preserveFullCardButton.state == .on
         configuration.minFreeSpaceGB = minimumFreeSpace
 
         applyPresetDefaults(to: &configuration)
@@ -475,12 +484,14 @@ private final class SettingsWindowController: NSWindowController {
             configuration.shootFolderStyle = .timeVolume
             configuration.autoEject = false
             configuration.checksumVerify = true
+            configuration.preserveFullCardForVideo = true
         case .hybridProduction:
             configuration.mediaMode = .photosAndVideos
             configuration.organizationMode = .shoots
             configuration.shootFolderStyle = .timeVolume
             configuration.autoEject = false
             configuration.checksumVerify = true
+            configuration.preserveFullCardForVideo = true
         case .ingestVillage:
             configuration.ingestVillageMode = true
             configuration.mediaMode = .photosAndVideos
@@ -491,6 +502,7 @@ private final class SettingsWindowController: NSWindowController {
             configuration.sharedStatusEnabled = true
             configuration.sharedManifestEnabled = true
             configuration.sharedLocksEnabled = true
+            configuration.preserveFullCardForVideo = true
         }
     }
 }
