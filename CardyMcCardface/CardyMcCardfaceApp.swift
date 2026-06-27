@@ -614,6 +614,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
     @Published var menuDetail = "Waiting for a camera card"
     @Published var menuSymbol = "sdcard.fill"
     @Published var launchAtLoginEnabled = false
+    @Published var ejectCardTitle = "Eject Card…"
+    @Published var canEjectCard = false
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--unregister-login") {
@@ -819,7 +821,49 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
             menuStatusTitle = "Service active"
         }
         menuDetail = message
+        if let candidate = ejectCandidate(from: status, state: state) {
+            ejectCardTitle = "Eject \(candidate.name)…"
+            canEjectCard = true
+        } else {
+            ejectCardTitle = "Eject Card…"
+            canEjectCard = false
+        }
         updateLoginItemState()
+    }
+
+    private func ejectCandidate(
+        from status: [String: Any]?,
+        state: String
+    ) -> (path: String, name: String)? {
+        guard state != "importing" else { return nil }
+
+        let sourcePath = status?["sourceVolumePath"] as? String
+        let sourceName = status?["sourceVolumeName"] as? String
+        let lastSourcePath = status?["lastSourceVolumePath"] as? String
+        let lastSourceName = status?["lastSourceVolumeName"] as? String
+
+        let candidates = [
+            (sourcePath, sourceName),
+            (lastSourcePath, lastSourceName),
+        ]
+
+        for (path, name) in candidates {
+            guard
+                let path,
+                !path.isEmpty,
+                path.hasPrefix("/Volumes/"),
+                FileManager.default.fileExists(atPath: path)
+            else {
+                continue
+            }
+
+            let volumeName = (name?.isEmpty == false)
+                ? name!
+                : URL(fileURLWithPath: path).lastPathComponent
+            return (path, volumeName)
+        }
+
+        return nil
     }
 
     private func handlePostImportApplication() {
@@ -970,8 +1014,76 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
         }
     }
 
+    @objc func ejectCard() {
+        let status = dictionary(at: CardyPaths.status)
+        let state = status?["state"] as? String ?? "active"
+
+        guard let candidate = ejectCandidate(from: status, state: state) else {
+            if state == "importing" {
+                showAlert("A card import is running. Wait for verification to finish before ejecting.")
+            } else {
+                showAlert("No mounted imported card is available to eject.")
+            }
+            refreshStatus()
+            return
+        }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Eject \(candidate.name)?"
+        alert.informativeText = "Cardy will ask macOS to eject \(candidate.path)."
+        alert.addButton(withTitle: "Eject")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let process = Process()
+        let errorPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
+        process.arguments = ["eject", candidate.path]
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            refreshStatus()
+
+            if process.terminationStatus == 0 {
+                showNotification(
+                    title: "Card ejected",
+                    message: "\(candidate.name) is safe to remove."
+                )
+            } else {
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                let errorText = String(data: errorData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                showAlert(
+                    "macOS could not eject \(candidate.name)."
+                        + ((errorText?.isEmpty == false) ? "\n\n\(errorText!)" : "")
+                )
+            }
+        } catch {
+            showAlert("Could not eject \(candidate.name): \(error.localizedDescription)")
+        }
+    }
+
     @objc func quit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    private func showNotification(title: String, message: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = [
+            "-e",
+            "display notification \"\(escapedAppleScriptString(message))\" with title \"\(escapedAppleScriptString(title))\" subtitle \"Cardy McCardface\"",
+        ]
+        try? process.run()
+    }
+
+    private func escapedAppleScriptString(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     private func showAlert(_ message: String) {
@@ -998,6 +1110,10 @@ private struct CardyMcCardfaceApp: App {
             Button("Scan Mounted Volumes") {
                 appDelegate.scanNow()
             }
+            Button(appDelegate.ejectCardTitle) {
+                appDelegate.ejectCard()
+            }
+            .disabled(!appDelegate.canEjectCard)
             Button("Open Import Log") {
                 appDelegate.openLog()
             }

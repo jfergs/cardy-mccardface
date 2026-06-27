@@ -30,6 +30,7 @@ and optionally ejects the card.
 - Native macOS notifications
 - Import-status menu-bar icon
 - Optional automatic eject
+- Manual card eject from the menu-bar app
 - Dry-run mode
 - JSON import sidecars
 - Ingest Village mode for multiple ingest stations writing to one shared volume
@@ -75,6 +76,7 @@ The menu displays:
 - current service/import status;
 - Settings;
 - Scan Mounted Volumes;
+- Eject Card, when the most recent imported card is still mounted;
 - Open Import Log;
 - Reveal Destination;
 - Reveal Last Import;
@@ -297,6 +299,16 @@ tail -f ~/Library/Logs/CardyMcCardface.log
 
 If verification fails, the card remains mounted. Interrupted transfers retain
 partial files and can resume later.
+
+## Ejecting a card
+
+Cardy can eject the most recent imported card from the menu-bar app. Open the
+Cardy menu and choose `Eject <card name>…`.
+
+The eject action is disabled while an import is running. This is intentional:
+removing a card during copy or verification can corrupt an ingest. If automatic
+eject is enabled in Settings, Cardy ejects the card only after successful
+verification.
 
 ## Troubleshooting
 

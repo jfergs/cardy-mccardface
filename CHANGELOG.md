@@ -17,3 +17,4 @@
 - Full visible card preservation for video and hybrid workflows.
 - Static local ingest dashboard.
 - Optional post-import reveal and creative-app handoff.
+- Manual card eject action in the menu-bar app.

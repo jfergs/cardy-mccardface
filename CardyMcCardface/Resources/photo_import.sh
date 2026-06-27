@@ -157,6 +157,10 @@ write_status() {
   local last_import_destination="${5:-}"
   local last_import_report="${6:-}"
   local shared_status_dir="${7:-}"
+  local source_volume_path="${8:-}"
+  local source_volume_name="${9:-}"
+  local last_source_volume_path="${10:-}"
+  local last_source_volume_name="${11:-}"
   local status_dir="${STATUS_FILE:h}"
   local temporary="${status_dir}/status.plist.tmp.$$"
 
@@ -170,6 +174,10 @@ write_status() {
   /usr/bin/plutil -insert lastImportDestination -string "$last_import_destination" "$temporary"
   /usr/bin/plutil -insert lastImportReport -string "$last_import_report" "$temporary"
   /usr/bin/plutil -insert sharedStatusDir -string "$shared_status_dir" "$temporary"
+  /usr/bin/plutil -insert sourceVolumePath -string "$source_volume_path" "$temporary"
+  /usr/bin/plutil -insert sourceVolumeName -string "$source_volume_name" "$temporary"
+  /usr/bin/plutil -insert lastSourceVolumePath -string "$last_source_volume_path" "$temporary"
+  /usr/bin/plutil -insert lastSourceVolumeName -string "$last_source_volume_name" "$temporary"
   /usr/bin/plutil -insert updatedAt -string "$(iso_timestamp)" "$temporary"
   command chmod 600 "$temporary"
   command mv -f "$temporary" "$STATUS_FILE"
@@ -1498,14 +1506,14 @@ process_volume() {
 
   log INFO "Import started: source=$volume files=$total_count bytes=$total_bytes capture_dates=${#sorted_dates[@]}"
   write_status "importing" "Sorting ${total_count} files across ${#sorted_dates[@]} dates from ${volume_name}" \
-    "$total_count" "$DESTINATION_ROOT" || true
+    "$total_count" "$DESTINATION_ROOT" "" "" "" "$volume" "$volume_name" "$volume" "$volume_name" || true
   write_shared_status "importing" "Sorting ${total_count} files across ${#sorted_dates[@]} dates from ${volume_name}" \
     "$total_count" "$DESTINATION_ROOT" "$volume_name" || true
   notify "Import started" "${total_count} files across ${#sorted_dates[@]} dates from ${volume_name}"
 
   if ! preflight_destination_root; then
     write_status "error" "Destination unavailable: ${DESTINATION_ROOT}" \
-      "$total_count" "$DESTINATION_ROOT" || true
+      "$total_count" "$DESTINATION_ROOT" "" "" "" "" "" "$volume" "$volume_name" || true
     write_shared_status "error" "Destination unavailable: ${DESTINATION_ROOT}" \
       "$total_count" "$DESTINATION_ROOT" "$volume_name" || true
     notify "Import failed" "NAS destination is unavailable. ${volume_name} was left mounted."
@@ -1611,7 +1619,7 @@ process_volume() {
     final_verification="not_run"
     log INFO "Dry run complete: source=$volume destination_root=$DESTINATION_ROOT capture_dates=${#sorted_dates[@]} would_copy=$total_copied elapsed_seconds=$elapsed estimated_mib_per_second=$speed_mib verification=not_run"
     write_status "active" "Dry run complete: ${total_copied} files across ${#sorted_dates[@]} dates" \
-      "$total_copied" "$DESTINATION_ROOT" || true
+      "$total_copied" "$DESTINATION_ROOT" "" "" "" "" "" "$volume" "$volume_name" || true
     write_shared_status "active" "Dry run complete: ${total_copied} files across ${#sorted_dates[@]} dates" \
       "$total_copied" "$DESTINATION_ROOT" "$volume_name" || true
     write_shared_import_manifest "dry_run" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
@@ -1635,7 +1643,8 @@ process_volume() {
       "$total_count" "$total_verified" || true
     log INFO "Import complete: source=$volume destination_root=$DESTINATION_ROOT capture_dates=${#sorted_dates[@]} copied=$total_copied source_files=$total_count verified_files=$total_verified elapsed_seconds=$elapsed speed_mib_per_second=$speed_mib verification=passed"
     write_status "active" "Import complete: ${total_count} files across ${#sorted_dates[@]} dates" \
-      "$total_count" "$DESTINATION_ROOT" "$LAST_IMPORT_DESTINATION" "$LAST_IMPORT_REPORT" "$SHARED_STATUS_DIR" || true
+      "$total_count" "$DESTINATION_ROOT" "$LAST_IMPORT_DESTINATION" "$LAST_IMPORT_REPORT" "$SHARED_STATUS_DIR" \
+      "" "" "$volume" "$volume_name" || true
     write_shared_status "active" "Import complete: ${total_count} files across ${#sorted_dates[@]} dates" \
       "$total_count" "$DESTINATION_ROOT" "$volume_name" || true
     write_shared_import_manifest "complete" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
@@ -1657,7 +1666,7 @@ process_volume() {
   final_verification="failed"
   log ERROR "Import failed: source=$volume destination_root=$DESTINATION_ROOT source_files=$total_count verified_files=$total_verified elapsed_seconds=$elapsed"
   write_status "error" "Import failed: ${total_verified} of ${total_count} verified" \
-    "$total_count" "$DESTINATION_ROOT" || true
+    "$total_count" "$DESTINATION_ROOT" "" "" "" "" "" "$volume" "$volume_name" || true
   write_shared_status "error" "Import failed: ${total_verified} of ${total_count} verified" \
     "$total_count" "$DESTINATION_ROOT" "$volume_name" || true
   write_shared_import_manifest "failed" "$volume_name" "$DESTINATION_ROOT" "$imported_at" \
