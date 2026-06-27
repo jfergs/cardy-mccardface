@@ -151,6 +151,11 @@ private enum PostImportApplication: String, CaseIterable {
     }
 }
 
+private struct EjectCandidate {
+    let path: String
+    let name: String
+}
+
 private struct CardyConfiguration {
     var destinationRoot = "\(CardyPaths.home)/Pictures"
     var workflowPreset = WorkflowPreset.personalPhoto
@@ -610,6 +615,20 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
     private var importerProcess: Process?
     private var settingsController: SettingsWindowController?
     private var handledPostImportReports = Set<String>()
+    private var cachedMountedEjectCandidates: [EjectCandidate] = []
+    private var lastMountedEjectScan = Date.distantPast
+    private let ejectScanInterval: TimeInterval = 5
+    private let cameraCardExtensions = Set([
+        "CR3", "CR2", "NEF", "ARW", "RAF", "ORF", "RW2", "DNG",
+        "JPG", "JPEG", "HEIC", "PNG", "TIF", "TIFF",
+        "MOV", "MP4", "MXF", "MTS", "M2TS", "R3D", "BRAW", "CRM",
+        "WAV", "AIFF", "AIF", "MP3",
+    ])
+    private let alwaysIgnoredEjectVolumes = Set([
+        "/volumes/photo",
+        "/volumes/macintosh hd",
+        "/volumes/spectre",
+    ])
     @Published var menuStatusTitle = "Service active"
     @Published var menuDetail = "Waiting for a camera card"
     @Published var menuSymbol = "sdcard.fill"
@@ -763,6 +782,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
     }
 
     @objc private func volumeMounted(_ notification: Notification) {
+        lastMountedEjectScan = .distantPast
+        refreshStatus()
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             self?.runImporter(reason: "volume mounted")
         }
@@ -834,7 +855,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
     private func ejectCandidate(
         from status: [String: Any]?,
         state: String
-    ) -> (path: String, name: String)? {
+    ) -> EjectCandidate? {
         guard state != "importing" else { return nil }
 
         let sourcePath = status?["sourceVolumePath"] as? String
@@ -848,22 +869,152 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
         ]
 
         for (path, name) in candidates {
-            guard
-                let path,
-                !path.isEmpty,
-                path.hasPrefix("/Volumes/"),
-                FileManager.default.fileExists(atPath: path)
-            else {
-                continue
+            if let candidate = recordedEjectCandidate(path: path, name: name) {
+                return candidate
             }
-
-            let volumeName = (name?.isEmpty == false)
-                ? name!
-                : URL(fileURLWithPath: path).lastPathComponent
-            return (path, volumeName)
         }
 
-        return nil
+        return mountedEjectCandidates().first
+    }
+
+    private func recordedEjectCandidate(path: String?, name: String?) -> EjectCandidate? {
+        guard
+            let path,
+            !path.isEmpty,
+            canConsiderForEject(path),
+            FileManager.default.fileExists(atPath: path)
+        else {
+            return nil
+        }
+
+        let volumeName = (name?.isEmpty == false)
+            ? name!
+            : URL(fileURLWithPath: path).lastPathComponent
+        return EjectCandidate(path: path, name: volumeName)
+    }
+
+    private func mountedEjectCandidates() -> [EjectCandidate] {
+        if Date().timeIntervalSince(lastMountedEjectScan) < ejectScanInterval {
+            return cachedMountedEjectCandidates
+        }
+
+        lastMountedEjectScan = Date()
+        let volumesURL = URL(fileURLWithPath: "/Volumes", isDirectory: true)
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: volumesURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        cachedMountedEjectCandidates = urls.compactMap { url in
+            let path = url.path
+            guard canConsiderForEject(path) else { return nil }
+            guard volumeIsEjectableCameraCard(path) else { return nil }
+            return EjectCandidate(path: path, name: url.lastPathComponent)
+        }
+
+        return cachedMountedEjectCandidates
+    }
+
+    private func canConsiderForEject(_ path: String) -> Bool {
+        guard path.hasPrefix("/Volumes/") else { return false }
+        let normalized = path.lowercased()
+        guard !alwaysIgnoredEjectVolumes.contains(normalized) else { return false }
+        guard normalized != destinationVolumePath().lowercased() else { return false }
+        return true
+    }
+
+    private func destinationVolumePath() -> String {
+        let destination = CardyConfiguration.load().destinationRoot
+        guard destination.hasPrefix("/Volumes/") else { return "" }
+        let components = destination.split(separator: "/", omittingEmptySubsequences: true)
+        guard components.count >= 2 else { return "" }
+        return "/Volumes/\(components[1])"
+    }
+
+    private func volumeIsEjectableCameraCard(_ path: String) -> Bool {
+        guard
+            let info = diskInfo(forVolumeAt: path),
+            boolValue(info["Ejectable"]),
+            !boolValue(info["Internal"]),
+            (
+                boolValue(info["Removable"])
+                    || boolValue(info["RemovableMedia"])
+                    || boolValue(info["MediaRemovable"])
+            )
+        else {
+            return false
+        }
+
+        return volumeLooksLikeCameraCard(path)
+    }
+
+    private func diskInfo(forVolumeAt path: String) -> [String: Any]? {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
+        process.arguments = ["info", "-plist", path]
+        process.standardOutput = output
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            return try PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        } catch {
+            return nil
+        }
+    }
+
+    private func boolValue(_ value: Any?) -> Bool {
+        switch value {
+        case let value as Bool:
+            return value
+        case let value as NSNumber:
+            return value.boolValue
+        case let value as String:
+            return ["true", "yes", "1"].contains(value.lowercased())
+        default:
+            return false
+        }
+    }
+
+    private func volumeLooksLikeCameraCard(_ path: String) -> Bool {
+        let root = URL(fileURLWithPath: path, isDirectory: true)
+        if FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("DCIM", isDirectory: true).path
+        ) {
+            return true
+        }
+
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return false
+        }
+
+        var inspected = 0
+        for case let fileURL as URL in enumerator {
+            inspected += 1
+            if inspected > 10_000 {
+                return false
+            }
+
+            let extensionName = fileURL.pathExtension.uppercased()
+            if cameraCardExtensions.contains(extensionName) {
+                return true
+            }
+        }
+
+        return false
     }
 
     private func handlePostImportApplication() {
@@ -1045,6 +1196,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObje
         do {
             try process.run()
             process.waitUntilExit()
+            lastMountedEjectScan = .distantPast
             refreshStatus()
 
             if process.terminationStatus == 0 {

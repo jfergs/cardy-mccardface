@@ -302,8 +302,10 @@ partial files and can resume later.
 
 ## Ejecting a card
 
-Cardy can eject the most recent imported card from the menu-bar app. Open the
-Cardy menu and choose `Eject <card name>…`.
+Cardy can eject the most recent imported card from the menu-bar app. If no
+recorded card is available, it scans mounted removable volumes and enables eject
+for a mounted camera card that contains `DCIM` or supported media files. Open
+the Cardy menu and choose `Eject <card name>…`.
 
 The eject action is disabled while an import is running. This is intentional:
 removing a card during copy or verification can corrupt an ingest. If automatic

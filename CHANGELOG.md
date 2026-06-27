@@ -18,3 +18,4 @@
 - Static local ingest dashboard.
 - Optional post-import reveal and creative-app handoff.
 - Manual card eject action in the menu-bar app.
+- Live mounted-card discovery for the manual eject action.
